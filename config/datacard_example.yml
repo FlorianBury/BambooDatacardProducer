@@ -1,0 +1,145 @@
+path: 
+# Either a single path as a string, or a list of string paths to the bamboo output(s)
+# Can also be a dictionary with the eras as keys  
+# Examples : 
+#
+#   example 1
+# path: <path_to_bamboo_output>
+#   
+#   example 2
+# path:
+#    - <path_to_bamboo_output_1>
+#    - <path_to_bamboo_output_2>
+#    - <path_to_bamboo_output_3>
+#
+#   example 3
+# path:
+#   2016: 
+#       - <path_to_bamboo_output_2016>
+#         [...]
+#   2017: 
+#       - <path_to_bamboo_output_2016>
+#         [...]
+#   2018: 
+#       - <path_to_bamboo_output_2016>
+#         [...]
+
+outputDir:
+# path to datacard output dir (can be relative or absolute)
+# Note : for scans can be useful to use the formatting (see relevant section)
+
+use_syst: 
+# True | False
+# Run with ot without taking the systematics shapes from the root files and producing lnL systematics in the datacards
+
+textfiles:
+# If not specified, the script will build one txt file per category (so one txt file per root file). This is standard practice and they can be combined later using the combine commands
+# If specified needs to be of type str with `<name of the file>.txt`, in that case a single txt datacard will be produced with all categories combined
+# If name includes a `{}` (eg `my_datacard_{}.txt`), then one datacard per category is created but following the convention `my_datacard_{category}.txt`
+
+yamlName: 
+# Bamboo plotIt output yaml file name 
+# -> needed so the script can go fetch the cross section, branching ratio, event weight sum to normalise the histograms 
+# In case you have several yaml files (eg, when datadriven is involved), you can include several as a list, just note that if several groups have same name, it will only take it once
+
+
+era: 
+# Era as single string or list of eras #
+# The datacard format will be {category}_{era}.root/txt
+# Needs to match the dictionary entries if used in this config
+
+plotIt:
+# To cross check what was produced in the datacards, plotIt is available in subdirectory `plotIt`
+# If this entry is absent, no plots is produced though
+# The following keys are implemented so far : legend, unitary_bin_width, plots:
+#
+# legend : 
+#   position : list of 4 float to specify the position of the legend 
+#   columns : number of colums in the legend (default = 1)
+# unitary_bin_width : True/False -> keep the bin width or not (default = False)
+# plots: 
+#   key : category defined in the histConverter
+#   value : any plot option from plotIt
+# /!\ a lot of default arguments are already implemented, maybe try without this option and then try the ones you want to implement
+  
+
+combineConfigs: 
+# Configs to run combine -> check combine_example.yml
+
+normSyst  : 
+# List of lnN systematics to add to the txt datacards 
+# Expects a dictionary of
+#   key : name of the lnN systematics to be put in the txt file
+#   values : config to determine what to put
+# Config is a dict that includes 
+#   - val : value of the lnN 
+#        can be either symmetric : eg 1.010
+#        or can be assymetric (then a list) : eg [0.990,1.020]
+#   - group : list of groups on which to apply the systematics [optional]
+#        note : if all your groups start with `\` it will use negation (eg, you want it applied to all groups except a few) 
+#   - era : if the lnN needs to be applied to a single era only
+#   - cat : only applied to a specific category (any regex string can work, eg '.*<str>.*' 
+# If a footer needs to be added to the end of the txt datacard, add it here in this way
+# footer: <str> or <list(str)>
+
+shapeSyst  : 
+# List of shape systematics to be converted to the root files and datacards
+# Expects a dictionnary of 
+#   key = systematic name in the bamboo output root file
+#   value = new systematic name (can be the same)
+# Notes : 
+#   - if the script finds a systematic in the root file that is not in this dictionary it will spits an error -> this is to make sure no mishaps happen
+#   - in case you don't want to use a systematics in the datacard, use `discard` as value
+#   - if `{era}` is in the value name, it will be replaced by the era in question (eg, when decorrelating per era)
+
+
+rebin: 
+# If rebinning is wanted, this entry should be present and a dictionnary
+#   keys = category the rebinning has to be applied to
+#   values = rebin config 
+# Config is a dict that contains 
+#   - method : the name of the rebinning method as defined in the script
+#   - params : list of parameters to be passed to the rebinnign class 
+# -> see rebinning_example.yml
+
+histCorrections: 
+# Corrections to be applied after aggregation of the histogram (eg non-closure corrections)
+# -> see corrections_example.yml
+
+histConverter: 
+# Histogram converter : dictionnary of 
+#   keys = name of the category for the datacard
+#   values = list of histogram names in the bamboo output root files
+# You can specify several that have to be added together
+# Example
+# <category>:
+#   - <hist1_name>
+#   - <hist2_name>
+#   - <hist3_name>
+# In which case the three histograms will be added correctly as <category>
+# -> useful when several channels (eg lepton channels) have to be added together
+
+groups:
+# Dict of groups to regroup samples, key = name of the group
+# Required entries : 
+#   - type: mc | signal | data
+#   - fill-color (mc, signal) | line-color (signal) : color for filling or line in plotIt and pre/postfit plots
+#   - legend : legend to be put in the plots
+#   - files: list of samples as defined in the results directory of bamboo output
+#   /!\ note : if the samples are different per era or category, this can also be specified in a dict, with for example
+#        files:
+#            - cat: [<regex> or <category>]
+#              files: <list of files>
+#            - cat: [<other regex> or <other category>]
+#              files: <list of files>
+#        this can be useful when some categories rely on datadriven for a group, and some others are MC based
+# Optional arguments for plotIt and pre/postfit
+#   - group : to regroup certains groups, eg produce datacards with VH,ttH,qqH, etc but have them regrouped into 'single H' in the plots
+#   - line-type : line style 
+#   - line-width : line width
+#   - fill-type : fill style
+#
+# Notes : 
+#   - Can also be specified as a list of dict, will be aggregated into a single dict in the script
+#   - Can be specified as a dict with eras as keys 
+
