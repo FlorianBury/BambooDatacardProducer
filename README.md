@@ -67,7 +67,7 @@ Note that this works recursively : you can use a variable parameter in a sub-con
 Example : 
 ```yaml
 [...] 
-outputDir = path_to_my_datacards_M_{mass}
+outputDir : path_to_my_datacards_M_{mass}
 [...]
 groups:
   - !include backgrounds.yml
