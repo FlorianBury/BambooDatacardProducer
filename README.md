@@ -4,7 +4,7 @@ How to clone :
 ```
 git clone --recurse-submodules <this-repo>
 ```
-This is because we use here the [HH inference tool](https://gitlab.cern.ch/hh/tools/inference/) to take advantage of all their combine plotting scripts.
+This is because we use here as submodule the [HH inference tool](https://gitlab.cern.ch/hh/tools/inference/) to take advantage of all their combine plotting scripts.
 
 The purpose of this set of scripts is to take the output from bamboo, produce datacards with several modifications and run combine on them.
 Following operations are implemented
@@ -48,14 +48,15 @@ A few tricks have been implemented so make your life easier !
 #### Include sub-configs 
 You can put an entire config entry (or subpart of it) in a separate file using `!include <name of sub-config>` (they have to be in the same directory though). During the yaml importation it will be filled by the sub-config content.
 
-Can be extremely useful when some content has to be shared between multiple configs, to avoid copy pasting and keeping track of the differences.
+Can be extremely useful when some content has to be shared between multiple configs, to avoid copy pasting and keeping track of the differences. Also works recursively (the sub-config can include sub-configs)
+
 Example : 
 ```yaml
 groups:
   - !include <groups1>.yml
   - !include <groups2>.yml
 ```
-Note : in this case the groups wil consist of a list of two dicts, but in the script it will make it a single dict.
+Note : in this case the groups will consist of a list of two dicts, but in the script it will make it a single dict.
 
 #### Using variables in the config
 When you try to do a parameter scan, you need one datacard per parameter, but you do not want to have a config per parameter because keeping track of changes is a nightmare...
