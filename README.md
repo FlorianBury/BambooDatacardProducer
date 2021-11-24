@@ -78,6 +78,6 @@ groups:
 
 ### Combine 
 
+An example of a combine config is given [here](config/combine_example.yml)
 
-
-
+For them to be run, their key (the combine mode) needs to be used in combination with the argument `--combine` (several modes separated by space can be used)
