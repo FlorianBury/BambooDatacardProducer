@@ -11,7 +11,8 @@ This is because we use here as submodule the [HH inference tool](https://gitlab.
 cd inference
 source setup.sh
 ``` 
-This is to compile the combine standalone part so this script (and yourself) can run the combine commands.
+This is to compile the combine standalone part so this script (and yourself) can run the combine commands. Just press enter for all the questions of the script.
+Note : outside bamboo virtual env
 
 The purpose of this set of scripts is to take the output from bamboo, produce datacards with several modifications and run combine on them.
 Following operations are implemented
