@@ -6,6 +6,13 @@ git clone --recurse-submodules <this-repo>
 ```
 This is because we use here as submodule the [HH inference tool](https://gitlab.cern.ch/hh/tools/inference/) to take advantage of all their combine plotting scripts.
 
+*Important* : once you have pulled this repository, you also have to do : 
+```
+cd inference
+source setup.sh
+``` 
+This is to compile the combine standalone part so this script (and yourself) can run the combine commands.
+
 The purpose of this set of scripts is to take the output from bamboo, produce datacards with several modifications and run combine on them.
 Following operations are implemented
 - Aggregation of several histograms
