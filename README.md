@@ -58,5 +58,19 @@ To overcome that you can put a string representing this parameter in the config 
 
 Note that this works recursively : you can use a variable parameter in a sub-config and it will work the same !
 
+Example : 
+```yaml
+[...] 
+outputDir = path_to_my_datacards_M_{mass}
+[...]
+groups:
+  - !include backgrounds.yml
+  - !include signal_{mass}.yml
+```
+
+
+### Combine 
+
+
 
 
