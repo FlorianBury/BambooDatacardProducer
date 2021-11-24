@@ -1,0 +1,3 @@
+[submodule "inference"]
+	path = inference
+	url = https://gitlab.cern.ch/hh/tools/inference.git
