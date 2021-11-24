@@ -1,0 +1,45 @@
+# The combineConfigs entry in the yaml config needs to be a dictionnary of combine modes
+# Note : in the context of combine, a category = a bin
+# The combine mode name can anything you want, it will be the name of the subdirectory put in the datacard output 
+# The values of each combine mode is a dictionnary that tells how this mode has to be run
+# Following keys are compulsory : 
+#   - mode : mode currently implemented are : limits | gof (goodness of fit) | pulls_impacts (blinded or not) | prefit | postfit_s/postfit_b 
+#       -> these let the script know what it has to run after the combine command 
+#   - command : combine command to be run (see recommendation below) 
+#       /!\ Note : do not put the txt datacard or `-d` argument, it will be used internally
+#   - bins : list of categories to be run over 
+# Additional argument implemented : 
+#   - submit : dict of sbatch parameters so the combine command is run on the cluster
+#   - combine_eras : if True and several eras are there, will run a combination of them 
+#   - combine_bins: if True, will run  with a combination of all the categories in the list (by deault True) 
+#   - split_eras : if True, will run once per era
+#   - split_bins : if True, will run once per category
+#       -> The four options above can be used together indiscriminantly
+#   - extern : dict of 'txtFiles' and 'rootFiles' in case you want to include an external set of datacards (eg for combination)
+#   - unblind : if True, will run unblinded (eg, for observed limits or pulls and impacts on background categories)
+#   - plotting : pass these arguments to the plotting script from the inference tool
+# Some arguments are mode dependent : 
+#   gof :  (note, gof always need to be run unblinded)
+#       - toys : number of toys to run 
+#       - toys-per-job : how many toys per job if `submit` is used
+#   pulls_impacts :
+#       - mc_stats : also check the impact of the statistical errors
+#       - use_snapshot : will first run a snapshot and then run pulls/impacts from it (faster and supposedly more stable)
+#   prefit/postfit_s/postfit_b :
+#       - plots : dict of parameters to be used as defined in `postfits.py`
+#
+#
+# Recommanded commands for combine are below : 
+   limits :    
+       "combine -M AsymptoticLimits -t -1"
+   gof: 
+       "combine -M GoodnessOfFit --algo=saturated --toysFrequentist"
+   pulls_impacts :
+       "combine -M MultiDimFit --verbose 3 --redefineSignalPOIs r --setParameters r=1.0 --setParameterRanges r=-6000.0,6000.0 --robustFit 1"
+   prefit :
+       "combine -M FitDiagnostics --verbose 3  --redefineSignalPOIs r --setParameters r=1.0 --setParameterRanges r=-1000,1000 --saveShapes --saveWithUncertainties --saveNormalizations --saveWorkspace --saveToys --saveNLL --saveOverallShapes  --keepFailures  --skipSBFit --skipBOnlyFit --ignoreCovWarning "
+   postfit_b :
+       "combine -M FitDiagnostics --verbose 3 --redefineSignalPOIs r --setParameters r=1.0 --setParameterRanges r=-1000,1000 --saveShapes --saveWithUncertainties --saveNormalizations --saveWorkspace --saveToys --saveNLL --saveOverallShapes  --keepFailures  --skipSBFit --ignoreCovWarning "
+   postfit_s :
+       "combine -M FitDiagnostics --verbose 3 --redefineSignalPOIs r --setParameters r=1.0 --setParameterRanges r=-1000,1000 --saveShapes --saveWithUncertainties --saveNormalizations --saveWorkspace --saveToys --saveNLL --saveOverallShapes --cminDefaultMinimizerType Minuit2 --cminDefaultMinimizerStrategy 0 --cminFallbackAlgo Minuit2,0:1.0 --X-rtd MINIMIZER_no_analytic --keepFailures  --skipBOnlyFit --ignoreCovWarning "
+
