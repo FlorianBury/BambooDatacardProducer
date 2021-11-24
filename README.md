@@ -1,5 +1,11 @@
 # BambooDatacardProducer
 
+How to clone : 
+```
+git clone --recurse-submodules <this-repo>
+```
+This is because we use here the [HH inference tool](https://gitlab.cern.ch/hh/tools/inference/) to take advantage of all their combine plotting scripts.
+
 The purpose of this set of scripts is to take the output from bamboo, produce datacards with several modifications and run combine on them.
 Following operations are implemented
 - Aggregation of several histograms
