@@ -6,10 +6,25 @@ import logging
 from hist_interface import PythonInterface, CppInterface
 
 class NumpyHist:
-    def __init__(self,e,w,s,name=None):
+    """
+        Helper class to perform perform transitions between ROOT histograms and their numpy contents
+        This is required for the rebinning functions that are numpy related 
+    """
+    #################################################################################################
+    #                                           __init__                                            #
+    #################################################################################################
+    def __init__(self,e,w,s2,name=None):
+        """
+            e = bin edges [N+1]
+            w = bin content [N]
+            s2 = quadratic bin error [N]
+                where N is the number of bins
+            name = name of the histogram [str] (to keep track from ROOT)
+            We keep in the self only the quadratic error 
+        """
         self._e  = e     # Bin edges
         self._w  = w     # Bin content
-        self._s2 = s**2  # Quadratic bin error 
+        self._s2 = s2  # Quadratic bin error 
         self._name = name
 
         if self._w.shape != self._s2.shape:
@@ -25,6 +40,9 @@ class NumpyHist:
         else:
             raise NotImplementedError(f'Dimension {self.ndim} has not been coded')
 
+    #################################################################################################
+    #                                         properties                                            #
+    #################################################################################################
     @property 
     def e(self):
         """ Return the bin edges """
@@ -41,7 +59,7 @@ class NumpyHist:
             Needed so the histogram addition is defined by quadratic addition 
             But this way the bin error can be access as an attribute
         """
-        return np.sqrt(self.s2)
+        return np.sqrt(self._s2)
 
     @property 
     def s2(self):
@@ -49,45 +67,55 @@ class NumpyHist:
         return self._s2
 
     @property 
+        """ Returns the number of dimensions of the histogram """
     def ndim(self):
         return self._w.ndim
 
     @property 
+        """ Returns the name of the histogram """
     def name(self):
         return self._name
 
     @property 
     def dims(self):
+        """ Returns the dimensions of the histograms axes """
         return self._w.shape
 
     @property 
     def integral(self):
+        """ Returns the histogram integral """
         return self._w.sum()
 
+    #################################################################################################
+    #                                       ROOT conversions                                        #
+    #################################################################################################
 
     @classmethod
     def getFromRoot(cls,h):
         """
-            From TH1 extract : 
+            From TH1/TH2 extract : 
                 e : edges including lower and upper 
                 w : content (GetBinContent)
                 s : errors  (GetBinError)
             return class object from (e,w,s)
+            Internally use the C++ helpers to speed up the data flow
         """
         # Cannot use isinstance because TH2 inherits from TH1 #
         name = h.GetName()
         if h.__class__.__name__.startswith('TH1'):
-            return cls(*CppInterface.getContent1D(h),name)
+            e,w,s = CppInterface.getContent1D(h)
         elif h.__class__.__name__.startswith('TH2'):
-            return cls(*CppInterface.getContent2D(h),name)
+            e,w,s = CppInterface.getContent2D(h)
         else:
             raise NotImplementedError(f'Unknown histogram type {h.__class__.__name__}')
+        return cls(e,w,s**2,name)
 
     def fillHistogram(self,name=None):
         """
             Inputs : 
             name : name to be used in the TH* instantiation (default = '')
             return : TH1/TH2 based on the dimension
+            Internally use the C++ helpers to speed up the data flow
         """
         if name is None:
             if self._name is None:
@@ -95,13 +123,23 @@ class NumpyHist:
             else:
                 name = self._name
         if self.ndim == 1:
-            return CppInterface.fillHistogram1D(self._e,self._w,self.s,name)
+            return CppInterface.fillHistogram1D(self.e,self.w,self.s,name)
         elif self.ndim == 2:
-            return CppInterface.fillHistogram2D(self._e,self._w,self.s,name)
+            return CppInterface.fillHistogram2D(self.e,self.w,self.s,name)
         else:
             raise NotImplementedError(f'Dimension {self.ndim} has not been coded')
 
+
+    #################################################################################################
+    #                                      Safety checks                                            #
+    #################################################################################################
     def compareAxes(self,other):
+        """
+            Compare the axes of the self with other, that can be 
+            - a NumpyHist object
+            - a numpy array
+            Raises an error in case something looks different 
+        """
         e1 = self._e
         # Get e2 #
         if isinstance(other,np.ndarray): 
@@ -130,8 +168,13 @@ class NumpyHist:
                 raise RuntimeError(f'Different x axes in two histograms : {e1[1]} versus {e2[1]}')
         else:
             raise NotImplementedError(f'Dimension {self.ndim} has not been coded')
+
     @staticmethod
     def compareRebinAxes(ax1,ax2):
+        """
+            Compares two arrays of axis edges, makes sure ax2 is contained in ax1
+            Safety check for the rebinning 
+        """
         if ax1.dtype != ax2.dtype:
             ax2 = ax2.astype(ax1.dtype)
         if ax1[0] != ax2[0]:
@@ -147,7 +190,15 @@ class NumpyHist:
             raise RuntimeError("New X axis edges not contained in initial ones : ["+",".join([str(wrong_edges[i]) for i in range(wrong_edges.shape[0])])+"]")
 
 
+    #################################################################################################
+    #                                      Magic methods                                            #
+    #################################################################################################
     def __add__(self,other):
+        """
+            Implements the addition with another NumpyHist
+            First, check the axes, then add the content linearly, and errors quadratically
+            Then returns the new results
+        """
         # Check axis first #
         self.compareAxes(other)
         # Return added content #
@@ -157,6 +208,10 @@ class NumpyHist:
                          self._name)
 
     def add(self,other):
+        """
+            Implements the addition with another NumpyHist
+            But in this case add the content to the self
+        """
         # Check axis first #
         self.compareAxes(other)
         # Return added content #
@@ -172,14 +227,21 @@ class NumpyHist:
     def __deepcopy__(self):
         return self.__copy__()
 
+    #################################################################################################
+    #                                      Helper methods                                           #
+    #################################################################################################
     @staticmethod
     def _checkTotal(arr1,arr2,name):
+        """
+            Check two arrays to make sure their integral did not change too much
+        """
         if arr1.sum() != 0. and abs(arr1.sum()-arr2.sum())/arr1.sum() > 1e-4:
             logging.warning(f'Difference in {name} above threshold : original {arr1.sum():.5e}, changed {arr2.sum():.5e} -> relative difference = {abs(arr1.sum()-arr2.sum())/arr1.sum():.3e}')
 
     def rebin(self,ne):
         """
             Rebin based on new bin edges ne
+            Checks are made to be sure that the new axis edges match some of the current ones
         """
         # 1D method #
         if self.ndim == 1:
@@ -218,26 +280,38 @@ class NumpyHist:
         self._checkTotal(self._w,nw,'content')
         self._checkTotal(self._s2,ns2,'quadratic error')
         # Return #
-        ns = np.sqrt(ns2)
-        return NumpyHist(ne,nw,ns,self._name)
+        return NumpyHist(ne,nw,ns2,self._name)
 
     def projectionX(self):
+        """
+            From a 2D histogram, return the projection in the X axis 
+        """
         if self.ndim != 2:
             raise NotImplementedError(f'Projection in dimension {self.ndim} is not implemented')
         e = self._e[0]
         w = self._w.sum(axis=1)
         s2 = self._s2.sum(axis=1)
-        return NumpyHist(e,w,np.sqrt(s2),self._name)
+        return NumpyHist(e,w,s2,self._name)
 
     def projectionY(self):
+        """
+            From a 2D histogram, return the projection in the Y axis 
+        """
         if self.ndim != 2:
             raise NotImplementedError(f'Projection in dimension {self.ndim} is not implemented')
         e = self._e[1]
         w = self._w.sum(axis=0)
         s2 = self._s2.sum(axis=0)
-        return NumpyHist(e,w,np.sqrt(s2),self._name)
+        return NumpyHist(e,w,s2,self._name)
 
     def split(self,x_edges=None,y_edges=None,axis='x'):
+        """
+            Split a 2D histogram into a series of smaller 2D histograms 
+            x_edges : edges on x axis along which to split
+            y_edges : edges on y axis along which to split
+                If any is None, no splitting along this axis
+            axis : 'x'|'y' decides in which order to return the list of new 2D hists
+        """
         if self.ndim != 2:
             raise NotImplementedError(f'Projection in dimension {self.ndim} is not implemented')
         if axis not in ['x','y']:
@@ -278,11 +352,11 @@ class NumpyHist:
 
         # Make list of NumpyHist #
         if axis == 'x':
-            nphs = [NumpyHist([ex,ey],ws[ix][iy],np.sqrt(s2s[ix][iy]),self._name)
+            nphs = [NumpyHist([ex,ey],ws[ix][iy],s2s[ix][iy],self._name)
                         for ix,ex in enumerate(nx_edges)
                         for iy,ey in enumerate(ny_edges)]
         if axis == 'y':
-            nphs = [NumpyHist([ex,ey],ws[iy][ix],np.sqrt(s2s[iy][ix]),self._name)
+            nphs = [NumpyHist([ex,ey],ws[iy][ix],s2s[iy][ix],self._name)
                         for iy,ey in enumerate(ny_edges)
                         for ix,ex in enumerate(nx_edges)]
 
@@ -290,6 +364,10 @@ class NumpyHist:
 
     @staticmethod
     def _splitArray(arr,x_lims,y_lims,axis):
+        """
+            Helper to split an array based on the limits in x and y axes
+            axis determins what order to return the list
+        """
         if axis == 'x':
             return [[splitxy for splitxy in np.split(splitx,y_lims,axis=1)]
                         for splitx in np.split(arr,x_lims,axis=0)]
@@ -299,6 +377,9 @@ class NumpyHist:
 
     @staticmethod
     def _splitEdges(e,lims):
+        """
+            Helper to split an edge array based on the limits on the axis
+        """
         ne = np.split(e,lims)
         for i in range(len(ne)-1):
             ne[i] = np.append(ne[i],ne[i+1][0]) 
@@ -306,6 +387,10 @@ class NumpyHist:
             
     @classmethod
     def concatenate(cls,list_nphs,axis=0):
+        """
+            Take a list of NumpyHist and concatenate them based on the provided axis number
+            Returns a single NumpyHist
+        """
         if not isinstance(list_nphs,list):
             raise RuntimeError(f'First argument needs to be a list of NumpyHists, is type {type(list_nphs)}')
         ndims = np.array([nph.ndim for nph in list_nphs])
@@ -341,6 +426,6 @@ class NumpyHist:
                 else:
                     raise NotImplementedError
 
-        return cls(e,w,np.sqrt(s2),list_nphs[0].name)
+        return cls(e,w,s2,list_nphs[0].name)
 
 
