@@ -4,10 +4,139 @@ import numpy as np
 import scipy
 import logging
 import scipy.interpolate
+from scipy.stats import chi2, norm
 from array import array
 import ROOT
 
 from numpy_hist import NumpyHist
+
+"""
+    How to use the rebinning classes
+
+    The rebinning classes takes one or a list of histograms and a certain number of parameters 
+    -> Based on these the new sets of bin edges is computed (`self.ne`)
+
+    The class object, which now contains the new bin edges can be applied on any ROOT histogram 
+    to return a rebinned histogram
+
+    Available algorithms : 
+    - Boundary  : New axis edges are provided directly as parameters (simplest method)
+        example : 
+            ```
+                obj = Boundary([0,5,20,100])
+                new_h = obj(h) 
+            ```
+            Provided the new bin edges match some of the ones from `h` 
+    - Quantile  : From the CDF of the provided histogram(s), computes the bin edges
+        to match the quantiles provided by the user 
+        example:
+            ```
+                obj = Quantile(h_sig,[0.,0.5,1.])
+                new_h = obj(h) 
+            ```
+            The bin edges are computed such that h_sig has 2 bins with 50% of h_sig content each
+            Then any histogram h can be called with the class to rebin them with such edges
+            
+    - Threshold : Iterative method that starts from the right of the histogram and starts aggregating bins
+                until a certain threshold condition is obtained. The list of thresholds are provided by the user.
+                Additional constraints are : 
+                    - one can pass additional histograms (extra) that are required to have at least one event in the bin
+                    - one can pass a minimum relative uncertainty threshold (rsut) to avoid stats fluctuations to be below 
+                        the thresholds
+                This class performs a threshold scan, which means the thresholds are adapted to the total integral, starting 
+                aggressively and lowers them until the required number or bins is obtained (which is the length of the threshold list)
+        example:
+            ```
+                obj = Threshold(h_sig,[1,4,9,16,25],[h_sup1,h_sup2],rsut=0.075)
+                new_h = obj(h) 
+            ```
+            The bin edges are computed such that :
+                - the threshold follow a quadratic increase in h_sig content 
+                - in this case, there should be 5 bins (number of thresholds)
+                - h_sup1 and h_sup2 have at least one entry in each bin [optionnal]
+                - the stats uncertainty above 0.075 [optionnal]
+            Then any histogram h can be called with the class to rebin them with such edges
+            
+    - Threshold2 : Iterative method that starts from the left of the histogram and starts aggregating bins
+                until a certain threshold condition is obtained. 
+                This is an upgrade of the Threshold class which had potentially large variations of backgrounds 
+                because based solely on signals. And the extra contributions could have fluctuations that impacted the binning heavily
+    
+                To counteract that, here the algorithm takes all the processes into account and computes the sum over them.
+                The thresholds are still provided by the user but are now inverted (eg, quadratic means quadraticly decreasing bins).
+                The algorithm also takes into account that the total stats variations must be above the threshold.
+                When the bins are aggregated, if for a certain process the bin is empty, the error is taken from the fallback vector.
+                Fallback vector is a vector with the same length as the list of histograms/processes, it is recommended that :
+                    - signal samples have a np.inf fallback (to force at least one signal event in the bin)
+                    - main background events have sumw2/sumw (even if empty, they should have an impact)
+                    - non main backgrounds have 0 (we don't really care is they are not in every bin)
+
+                This class performs a threshold scan, which means the thresholds are adapted to the total integral, starting 
+                aggressively and lowers them until the required number or bins is obtained (which is the length of the threshold list)
+
+        example:
+            ```
+                obj = Threshold2([<list-of-histogram>],[1,4,9,16,25],[<list of fallbacks>])
+                new_h = obj(h) 
+            ```
+            The bin edges are computed such that :
+                - the threshold follow a quadratic decrease in the total content (including signal) 
+                - in this case, there should be 5 bins (number of thresholds)
+                - fallbacks must have same length as list of histograms
+            Then any histogram h can be called with the class to rebin them with such edges
+
+    The same algorithm also work in 2D versions (Boundary2D, Quantile2D, Threshold2D)
+    in exactly the same way except the parameters have to be provided for both the x and y axes
+    These algorithms work independently on the x and y axis by projections
+
+    The Linearize2D method allows to turn a 2D histogram into a linearized 1D one
+    example : 
+        ```
+            # h is a 2D histogram 
+            objx = Linearize2D('x')
+            hx = Linearize2D(h)
+        ```
+        In this case, we ask that the major axis is x, and the minor will be y (opposite can be done with 'y' instead)
+        This means that the 1D histogram hx will consist in large x bins that contain the y bins
+
+        In case come rebinning has to be done on the major axis first, one can do 
+        ```
+            objx = Linearize2D('x')
+            objx.nemajor = [0,5,100]
+            hx = Linearize2D(h)
+        ```
+        In which case the x major bins will be first rebinned into the two bins [0,5,100], the the histogram linearized
+        In case the rebinning also has to be done in the minor axis, one can also add 
+        ```
+            objx.neminor = [[0,0.5,1],[0,0.3,1.]]
+        ```
+        Note that since we have 2 major bins, we need to provide a list of 2 minor binnings.
+        In general the neminor length must be the same as the number of bins of the major axis
+        This means the minor binning in each major bin can be optimized independently
+
+    To perform something more automatic, one cane use the LinearizeSplit, which applies the above mentionned 
+    1D rebinning for both major and minor (if requested) , before linearizing.
+    So the major and minor classes need to be provided with their associated parameters
+        example : we want a quantile binning of the y axis, and a threshold2 binning of the x axis in each major bin of y
+        ```
+            obj = LinearizeSplit(h_sig,
+                                 major        = 'y',
+                                 major_class  = 'Quantile',
+                                 major_params = [[0.,0.4,0.8,1.]],
+                                 minor_class  = 'Threshold2',
+                                 minor_params = [list_h,[1,4,9,16,25],fallbacks])
+            # h2D = 2D histogram
+            h_lin = LinearizeSplit(h2D)
+        ```
+        In this case we will have a linearized histogram in which :
+            - there are 3 y bins with edges based on h_sig quantiles
+            - for each of the 3 major y bins, the content in x axis is rebinned by the threshold2 algo
+                with 5 bins and the processes fallbacks
+        => 3 x 5 = 15 bins
+        Note that in this particular example, we have to provide the additional histograms as parameters
+        The major and minor classes are optional, but keep in mind if no rebinning is employed, the number 
+        of bins in linearized histogram can be quite large.
+"""
 
 class Rebin:
     """
@@ -257,6 +386,9 @@ class Threshold(Rebin):
         return idx[1 + tidx :]     
 
 
+# https://en.wikipedia.org/wiki/Poisson_distribution#Confidence_interval 
+# poisson confidence interval (1-sigma, upper) for lambda if oberservation was 0 
+LAMBDA0 = chi2.ppf(1 - (1 - (norm.cdf(1) * 2 - 1)) / 2, 2) / 2
 class Threshold2(Rebin):
     """
         Applied threshold binning 
@@ -279,6 +411,7 @@ class Threshold2(Rebin):
             thresh = np.array(thresh)
         if not isinstance(fallback,np.ndarray):
             fallback = np.array(fallback)
+        fallback *= LAMBDA0 ** 0.5 # mathematical correction
         if not isinstance(h_list,list):
             raise RuntimeError('`h_list` must be a list')
         nphs = [self._processHist(h) for h in h_list]
@@ -600,29 +733,3 @@ class LinearizeSplit(Linearize2D):
             # Record the new binning #
             self.neminor.append(minorObj.ne)
 
-if __name__ == '__main__':
-    a = NumpyHist([np.array([0,1,2,3,4,5,10]),np.arange(11)],
-                  np.arange(60).reshape(6,10),
-                  np.arange(60).reshape(6,10)/10,'test')
-
-
-    x = NumpyHist.concatenate([NumpyHist(np.array([0,1,2,3,10]),
-                                        np.array([1,2,3,4]),
-                                        np.array([0.1,0.2,0.3,0.4])),
-                              NumpyHist(np.array([0,3,6]),
-                                        np.array([6,7]),
-                                        np.array([0.1,0.2]))])
-    y = NumpyHist.concatenate([NumpyHist([np.array([0,1,2,3,10,]),np.arange(5)],
-                                        np.arange(16).reshape(4,4),
-                                        np.arange(16).reshape(4,4)),
-                              NumpyHist([np.array([5,10,15]),np.arange(5)],
-                                        np.arange(8).reshape(2,4),
-                                        np.arange(8).reshape(2,4))],axis=0)
-    z = NumpyHist.concatenate([NumpyHist([np.arange(5),np.array([0,1,2,3,10,])],
-                                        np.arange(16).reshape(4,4),
-                                        np.arange(16).reshape(4,4)),
-                              NumpyHist([np.arange(5),np.array([5,10,15])],
-                                        np.arange(8).reshape(4,2),
-                                        np.arange(8).reshape(4,2))],axis=1)
-
-    
