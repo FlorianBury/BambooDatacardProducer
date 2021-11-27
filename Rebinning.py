@@ -280,6 +280,7 @@ class Threshold(Rebin):
             raise RuntimeError("Fewer bins than thresholds")
 
         # Threshold scan #
+        logging.debug("Starting scan for Threshold")
         nbins = thresh.shape[0]
         rsut_trials = 1
         rsut_trials_max = 10
@@ -300,7 +301,7 @@ class Threshold(Rebin):
                     idx = idx[1:]     
                 # Get bin edges #
                 ne = np.unique(np.r_[nph.e[0], nph.e[idx] , nph.e[-1]])
-                logging.debug(f'Trying factor {factor} (epsilon = {epsilon}), number of bins = {len(ne)}')
+                logging.debug(f'\tTrying factor {factor} (epsilon = {epsilon}), number of bins = {len(ne)}')
                 if ne.shape[0] <= nbins + 1: # Not too far
                     # if perfect number -> record it #
                     if ne.shape[0] == nbins + 1:
@@ -338,7 +339,7 @@ class Threshold(Rebin):
             else:
                 break
         if self.ne.shape[0] != nbins +1:
-            raise RuntimeError(f'Error in threshold : hist will have {self.ne.shape[0]-1} bins, but you asked for {nbins}')
+            raise RuntimeError(f'Error in threshold, hist will have {self.ne.shape[0]-1} bins, but you asked for {nbins} : bins = {self.ne}')
             # Because can be a problem for combination
         logging.debug(f'Found binning : {self.ne}')
                 
@@ -436,56 +437,72 @@ class Threshold2(Rebin):
         totval = np.sum(data['value'],axis=0) # Sum over bin of all processes
         # Need to inverse because rebin_method goes from left to right
         data = data[:,::-1]
+
         # Threshold scan #
+        logging.debug("Starting scan for Threshold2")
         nbins = thresh.shape[0]
-        factor = 1.
-        epsilon = 0.01
-        epsilon_min = epsilon * 1e-9
-        self.ne = None
-        while factor > 0.:
-            thresh_test = thresh * factor * ws.sum() / thresh.max() 
-            idx = self.rebin_method(thresh  = thresh_test,
-                                    data    = data,
-                                    fallback=fallback)
-            # Invert back the bin indexes #
-            idx = data.shape[1] - 1 - idx[::-1]
-            # fuse left-most two bins if they are rising in content #
-            if len(idx) > 0 and totval[0 : idx[0]].sum() < totval[idx[0] : (idx[1] if len(idx) > 1 else None)].sum():
-                idx = idx[1:]
-            # Make binning #
-            ne = np.unique(np.r_[e[0], e[idx] , e[-1]])
-            logging.debug(f'Trying factor {factor} (epsilon = {epsilon}), number of bins = {len(ne)}')
-            if ne.shape[0] <= nbins + 1: # Not too far
-                # if perfect number -> record it #
-                if ne.shape[0] == nbins + 1:
-                    self.ne = ne
-                # Iteration #
-                if factor - epsilon > 0 or epsilon < epsilon_min:
-                    factor -= epsilon 
-                else:
-                    epsilon /= 10
-                # Even if we found the correct number of bins, we want to continue, 
-                # maybe first bin is not populated as much as it could be 
-            else: #self.ne.shape[0] > nbins + 1 ->  # Too far
-                if self.ne is None and epsilon > epsilon_min:
-                    # Not converged, maybe we passed over the good threshold
-                    # Go back one step, and divide epsilon 
-                    factor += epsilon
-                    epsilon /= 10
-                    # Can't find the perfect point between too many and two few bins, just merge the first bins until it matches #
-                    if epsilon < epsilon_min:
-                        excess_bins = ne.shape[0]-(nbins+1)
-                        assert excess_bins > 0
-                        self.ne = copy(ne[excess_bins:])
-                        self.ne[0] = ne[0]
-                        logging.debug(f"Cannot find the sweet spot, will merge the first bins : {ne} [{ne.shape[0]} bins]  -> {self.ne} [{self.ne.shape[0]} bins]")
+        variance_trials = 1
+        variance_trials_max = 10
+        while variance_trials < variance_trials_max:
+            factor = 1.
+            epsilon = 0.01
+            epsilon_min = epsilon * 1e-9
+            self.ne = None
+            while factor > 0.:
+                thresh_test = thresh * factor * ws.sum() / thresh.max() 
+                idx = self.rebin_method(thresh  = thresh_test,
+                                        data    = data,
+                                        fallback=fallback)
+                # Invert back the bin indexes #
+                idx = data.shape[1] - 1 - idx[::-1]
+                # fuse left-most two bins if they are rising in content #
+                if len(idx) > 0 and totval[0 : idx[0]].sum() < totval[idx[0] : (idx[1] if len(idx) > 1 else None)].sum():
+                    idx = idx[1:]
+                # Make binning #
+                ne = np.unique(np.r_[e[0], e[idx] , e[-1]])
+                logging.debug(f'\tTrying factor {factor} (epsilon = {epsilon}), number of bins = {len(ne)}')
+                if ne.shape[0] <= nbins + 1: # Not too far
+                    # if perfect number -> record it #
+                    if ne.shape[0] == nbins + 1:
+                        self.ne = ne
+                    # Iteration #
+                    if factor - epsilon > 0 or epsilon < epsilon_min:
+                        factor -= epsilon 
+                    else:
+                        epsilon /= 10
+                    # Even if we found the correct number of bins, we want to continue, 
+                    # maybe first bin is not populated as much as it could be 
+                else: #self.ne.shape[0] > nbins + 1 ->  # Too far
+                    if self.ne is None and epsilon > epsilon_min:
+                        # Not converged, maybe we passed over the good threshold
+                        # Go back one step, and divide epsilon 
+                        factor += epsilon
+                        epsilon /= 10
+                        # Can't find the perfect point between too many and two few bins, just merge the first bins until it matches #
+                        if epsilon < epsilon_min:
+                            excess_bins = ne.shape[0]-(nbins+1)
+                            assert excess_bins > 0
+                            self.ne = copy(ne[excess_bins:])
+                            self.ne[0] = ne[0]
+                            logging.debug(f"Cannot find the sweet spot, will merge the first bins : {ne} [{ne.shape[0]} bins]  -> {self.ne} [{self.ne.shape[0]} bins]")
+                            break
+                    else:
+                        # self.ne has been found, will not get better
                         break
-                else:
-                    # self.ne has been found, will not get better
-                    break
+            if self.ne is None: # Still not found 
+                self.ne = ne
+            if self.ne.shape[0] != nbins +1:
+                logging.warning(f'{self.ne.shape[0]-1} bins were produced, but you asked for {nbins}, will artificially divide the variance by 2 to help convergence [Attempt {variance_trials}/{variance_trials_max}]')
+                data['variance'] /= 2
+                variance_trials += 1
+                if variance_trials == 5:
+                    logging.warning('Does not seem to converge ... Will cancel all fallbacks')
+                    fallback = np.zeros(data.shape[0])
+            else:
+                break
 
         if self.ne.shape[0] != nbins + 1:
-            raise RuntimeError(f'Error in threshold : hist will have {self.ne.shape[0]-1} bins, but you asked for {nbins}')
+            raise RuntimeError(f'Error in threshold, hist will have {self.ne.shape[0]-1} bins, but you asked for {nbins} : bins = {self.ne}')
             # Because can be a problem for combination
         logging.debug(f'Found binning : {self.ne}')
                 
@@ -530,7 +547,7 @@ class Boundary(Rebin):
         Rebin with the given boundaries for the bin edges
         h not used (kept for compatibility)
     """
-    def __init__(self, boundaries=None):
+    def __init__(self, h=None, boundaries=None):
         """
             boundaries : list of bin edges
         """
@@ -545,7 +562,7 @@ class Boundary2D(Rebin):
         Applied boundary binning 
         Rebin with the given boundaries for the bin edges
     """
-    def __init__(self,bx,by):
+    def __init__(self,h=None,bx=None,by=None):
         """
             bx : list of edges for the x axis
             by : list of edges for the y axis
@@ -700,6 +717,7 @@ class LinearizeSplit(Linearize2D):
         # Use the major class method to obtain the major axis rebinning #
         majorObj = getattr(sys.modules[__name__], major_class)(hmajor,*major_params)
         self.nemajor = majorObj.ne
+        logging.debug(f"Rebinning with class {major_class} yielded following major {self.major} axis bins : {self.nemajor}")
 
         # Split the 2D histogram along major axis #
         # (projection now done on the other axis, because we want to get the minor binning #
@@ -732,4 +750,5 @@ class LinearizeSplit(Linearize2D):
             minorObj = getattr(sys.modules[__name__], minor_class)(nph_split,*minor_params)
             # Record the new binning #
             self.neminor.append(minorObj.ne)
+            logging.debug(f'Rebinning of the minor axis in major bin {i} [{self.nemajor[i]},{self.nemajor[i+1]}] yielded following binning : {minorObj.ne}')
 

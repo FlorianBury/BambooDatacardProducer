@@ -1267,7 +1267,7 @@ class Datacard:
         assert len(params) == 2
         assert isinstance(params[0],list)
         assert isinstance(params[1],list)
-        boundObj = Boundary2D(params[0],params[1])
+        boundObj = Boundary2D(bx=params[0],by=params[1])
         if logging.root.level <= 10:
             pbar = enlighten.Counter(total=self.countPerHistName(histName), desc='Progress', unit='histograms')
         for group in self.content[histName].keys():

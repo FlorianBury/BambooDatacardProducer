@@ -67,13 +67,13 @@ class NumpyHist:
         return self._s2
 
     @property 
-        """ Returns the number of dimensions of the histogram """
     def ndim(self):
+        """ Returns the number of dimensions of the histogram """
         return self._w.ndim
 
     @property 
-        """ Returns the name of the histogram """
     def name(self):
+        """ Returns the name of the histogram """
         return self._name
 
     @property 

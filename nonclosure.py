@@ -6,7 +6,7 @@ import ROOT
 
 class NonClosureDY:
     def __init__(self,**kwargs):
-        self.path_json = kwargs['path_json'] 
+        self.path_json = os.path.abspath(os.path.join(os.path.dirname(__file__),kwargs['path_json']))
         with open(self.path_json,'r') as handle:
             self.content = json.load(handle)
 
@@ -89,7 +89,7 @@ class NonClosureDY:
 
 class NonClosureFake:
     def __init__(self,**kwargs):
-        self.path_json = kwargs['path_json'] 
+        self.path_json = os.path.abspath(os.path.join(os.path.dirname(__file__),kwargs['path_json']))
         with open(self.path_json,'r') as handle:
             self.content = json.load(handle)
 
