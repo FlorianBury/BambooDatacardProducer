@@ -1756,9 +1756,9 @@ class Datacard:
             if 'hide' in gconfig.keys() and gconfig['hide']:
                 continue
             config['files'][outFile] = {'cross-section'   : 1./lumi,
-                                              'era'             : str(self.era),
-                                              'generated-events': 1.,
-                                              'type'            : gconfig['type']}
+                                        'era'             : str(self.era),
+                                        'generated-events': 1.,
+                                        'type'            : gconfig['type']}
             if gconfig['type'] != 'signal':
                 plotGroup = group if 'group' not in gconfig.keys() else gconfig['group']
                 config['files'][outFile].update({'group':plotGroup})
@@ -1810,8 +1810,8 @@ class Datacard:
                 # No Events/ [bin width] (can be misunderstood)
 
             # Adjust the y axis #
-            if histMax[h1] != 0.:
-                config['plots'][h1n]['y-axis-range'] = [0.,histMax[h1]*1.5]
+            if histMax[h1] > 0.:
+                config['plots'][h1n]['y-axis-range'] = [0.,histMax[h1]]
                 config['plots'][h1n]['log-y-axis-range'] = [histMin[h1],histMax[h1]*100]
                 config['plots'][h1n]['ratio-y-axis-range'] = [0.8,1.2]
             # Add labels #
@@ -3285,33 +3285,41 @@ if __name__=="__main__":
             if os.path.exists(plotIt_path):
                 shutil.rmtree(plotIt_path)
             os.makedirs(plotIt_path)
+        if not args.plotIt and not args.yields:
+            make_prod = True
+            make_plots = True
+            make_yields = True
+        else:
+            make_prod = False
+            make_plots = args.plotIt
+            make_yields = args.yields
+        if args.worker:
+            make_plots = False
+            make_yields = False
         # Need to be done prior to avoid thread concurrences
         plotIt_configs = []
         # Serial processing #
         if args.jobs is None:
             plotIt_configs = []
             for instance in instances:
-                if not args.plotIt and not args.yields:
+                if make_prod:
                     instance.run_production()
-                if not args.worker:
-                    plotIt_config = instance.prepare_plotIt()
-                    if plotIt_config is not None:
-                        plotIt_configs.append(plotIt_config)
-                    instance.saveYieldFromDatacard()
         # Parallel processing #
         else:
             if args.jobs == -1 or args.jobs > len(instances):
                 args.jobs = len(instances)
             methods = ['run_production']
-            if not args.plotIt and not args.yields:
+            if make_prod:
                 with mp.Pool(processes=args.jobs) as pool:
                     instances = pool.starmap(run_instance,[(instance,methods) for instance in instances])
-            if not args.worker:
-                for instance in instances:
-                    plotIt_config = instance.prepare_plotIt()
-                    if plotIt_config is not None:
-                        plotIt_configs.append(plotIt_config)
-                    instance.saveYieldFromDatacard()
+        # Plots and yields #
+        for instance in instances:
+            if make_plots:
+                plotIt_config = instance.prepare_plotIt()
+                if plotIt_config is not None:
+                    plotIt_configs.append(plotIt_config)
+            if make_yields:
+                instance.saveYieldFromDatacard()
 
         # Interpolation #
         if args.interpolation is not None:
@@ -3366,28 +3374,26 @@ if __name__=="__main__":
             # Serial processing #
             if args.jobs is None:
                 for instance1,instance2,instanceInt in instanceMatches:
-                    if not args.plotIt and not args.yields:
+                    if make_prod:
                         instanceInt = run_interpolation(instance1,instance2,instanceInt,configMain,configInt)
-                    if not args.worker:
-                        instanceInt.plotIt = None
-                        instanceInt.groups.update(configInt['plotIt'])
-                        plotIt_config = instanceInt.prepare_plotIt()
-                        if plotIt_config is not None:
-                            plotIt_configs.append(plotIt_config)
             # Parallel processing #
             else:
                 if args.jobs == -1 or args.jobs > len(instancesInt):
                     args.jobs = len(instancesInt)
-                if not args.plotIt and not args.yields:
+                if make_prod:
                     with mp.Pool(processes=args.jobs) as pool:
                         instancesInt = pool.starmap(run_interpolation,[(*instanceMatch,configMain,configInt) for instanceMatch in instanceMatches])
-                for instance in instancesInt:
-                    instance.plotIt = None
-                    instanceInt.groups.update(configInt['plotIt'])
-                    if not args.worker:
-                        plotIt_config = instance.prepare_plotIt()
-                        if plotIt_config is not None:
-                            plotIt_configs.append(plotIt_config)
+
+            # plotit and yields #
+            for instance in instancesInt:
+                instance.plotIt = None
+                instanceInt.groups.update(configInt['plotIt'])
+                if make_plots:
+                    plotIt_config = instance.prepare_plotIt()
+                    if plotIt_config is not None:
+                        plotIt_configs.append(plotIt_config)
+                if make_yields:
+                    instanceInt.saveYieldFromDatacard()
 
         if len(plotIt_configs) > 0:
             # Merge and run plotit (single thread anyway) #
