@@ -1851,6 +1851,10 @@ class Datacard:
             if 'plots' in self.plotIt:
                 if h1n in self.plotIt['plots']:
                     config['plots'][h1n].update(self.plotIt['plots'][h1n])
+                    if 'discard' in config['plots'][h1n].values():
+                        keys_to_discard = [key for key,val in config['plots'][h1n].items() if val == 'discard']
+                        for key in keys_to_discard:
+                            del config['plots'][h1n][key]
 
         # Add shape systematics
         if len(systematics) > 0 and self.use_syst:
@@ -2611,34 +2615,6 @@ class Datacard:
                         raise RuntimeError("Could not find any fitdiag file in subdir")
                     fitdiagFile = fitdiagFile[0].replace('/auto','') 
                     # Generate dat config file #
-#                    path_dict = os.path.join(subdirBin,'dict.dat')
-#                    self.makeDictForPostFit(path_dict,config)
-                    # Run plotting #
-#                    fitplot_cmd = f"cd {SETUP_DIR}; "
-#                    postfit_script = os.path.join(INFERENCE_PATH,'dhi','scripts','postfit_plots.py')
-#                    fitplot_cmd += f"env -i bash -c 'source {SETUP_SCRIPT} && cd {SCRIPT_DIR} && python {postfit_script} --plot_options_dict {path_dict} --output_folder {subdirBin} "
-#                    if 'postfit' in combineMode:
-#                        fitplot_cmd += " --doPostFit "
-#                    if 'unblind' in combineCfg.keys() and combineCfg['unblind']:
-#                        fitplot_cmd += " --unblind "
-#                    fitplot_cmd += "'"
-#
-#                    rc,output = self.run_command(fitplot_cmd,shell=True, return_output=True)
-#                    if rc != 0: 
-#                        if logging.root.level > 10:
-#                            for line in output:
-#                                logging.info(line.strip())
-#                        logging.error('Failed to produce fit plots, see log above')
-#                    else:
-#                        logging.info(f'Produced plots in {subdirBin}')
-
-                    # Generate plots #
-                    #split_by_eras = False # By default combine eras 
-                    #if 'split_eras' in combineCfg.keys() and combineCfg['split_eras']:
-                    #    split_by_eras = True
-                    #    if 'combine_eras' in combineCfg.keys() and combineCfg['combine_eras']:
-                    #        raise RuntimeError(f'For mode {combineMode} you cannot use both `split_eras` and `combine_eras`')
-                        
                     def getProcesses(samples):
                         processes = {}
                         for sample, sampleCfg in samples.items():
@@ -2735,52 +2711,6 @@ class Datacard:
                             for path_plot in path_plots:
                                 logging.info(f'Produced {path_plot}')
 
-#                        content_log = {
-#                            'paths'                 : [os.path.join(subdirBin,'nuisances_log.pdf')],
-#                            'poi'                   : 'r',
-#                            'fit_name'              : fit_name,
-#                            'workspace'             : resultFile[0],
-#                            'fit_diagnostics_path'  : fitdiagFile,
-#                            'y_log'                 : True,
-#                        }
-
-
-#                    from fitdiag_plots import create_postfit_plots
-#                    from collections import OrderedDict
-#                    info_bin = eval(open(path_dict, "r").read())
-#                    folder = None
-#                    if combineMode == 'prefit':
-#                        folder = 'shapes_prefit'
-#                    elif combineMode == 'postfit_b':
-#                        folder = 'shapes_fit_b'
-#                    elif combineMode == 'postfit_s':
-#                        folder = 'shapes_fit_s'
-#                    else:
-#                        raise RuntimeError(f'fit mode {combineMode} not understood')
-#
-#                    for key, binCfg in info_bin.items():
-#                        unblind = False
-#                        for plotCfg in config['plots']:
-#                            if plotCfg['name'] in key and 'unblind' in plotCfg.keys() and plotCfg['unblind']:
-#                                unblind = True
-#                        while True:
-#                            try:
-#                                create_postfit_plots(path                    = subdirBin,
-#                                                     fit_diagnostics_path    = fitdiagFile,
-#                                                     normalize_X_original    = False,
-#                                                     doPostFit               = 'postfit' in combineMode,
-#                                                     divideByBinWidth        = True,
-#                                                     folder                  = folder,
-#                                                     bin                     = binCfg,
-#                                                     binToRead               = key,
-#                                                     unblind                 = unblind)
-#                                break
-#                            except:
-#                                logging.error('Failed to do fitdiag plots, will retry')
-#
-
-                        
-                                        
             # Combined finalize mode for all bins (in case there was) #
             if len(subdirBinPaths) > 1 and not self.worker:
                 # Limits : combine into one plot #
@@ -2922,89 +2852,6 @@ class Datacard:
             for line in output:
                 handle.write(line)
         return rc == 0
-
-    def makeDictForPostFit(self,filePath,config):
-        def colorTrad(s):
-            if isinstance(s,int):
-                return s
-            if isinstance(s,str):
-                return ROOT.TColor.GetColor(s)
-
-        if isinstance(self.era,str):
-            multi_era = False
-            eras = [self.era]
-        elif isinstance(self.era,list):
-            multi_era = True
-            if len(self.era) == 1:
-                logging.warning('Multi era requested, but seems only one is used')
-            eras = self.era
-        else:
-            raise RuntimeError(f'`era` type {type(self.era)} not understood')
-            
-        with open(filePath,'w') as handle:
-            handle.write("{\n")
-            for era in eras:
-                for plotCfg in config['plots']:
-                    handle.write(f"\t'{plotCfg['name']}_{era}' : "+"{\n")
-                    for key,val in config['main'].items():
-                        if isinstance(val,str):
-                            handle.write(f"\t\t'{key}': '{val}',\n")
-                        else:
-                            handle.write(f"\t\t'{key}': {val},\n")
-                    handle.write(f"\t\t'header_legend' : '{plotCfg['header']}',\n")
-                    handle.write(f"\t\t'era' : {era},\n")
-                    handle.write("\t\t'align_cats': [")
-                    for b in plotCfg['bins']:
-                        if multi_era:
-                            if b not in self.histConverter[era].keys():
-                                raise RuntimeError(f'Bin {b} not in defined histograms for era {era}')
-                        else:
-                            if b not in self.histConverter.keys():
-                                raise RuntimeError(f'Bin {b} not in defined histograms')
-                        handle.write(f"'{b}_{era}',")
-                    handle.write("],\n")
-                    if 'labels' in plotCfg.keys():
-                        handle.write("\t\t'align_cats_labels'  :[ "+','.join([f"['{l}']" for l in plotCfg['labels']])+"],\n")
-                        handle.write("\t\t'align_cats_labelsX' :[ "+','.join([f"{l}" for l in plotCfg['labelpos']])+"],\n")
-                    handle.write("\t\t'procs_plot_options_bkg' : OrderedDict(\n\t\t\t[\n")
-                    if era in self.groups.keys():
-                        groups = self.groups[era]
-                    else:
-                        groups = self.groups
-                    for group,groupCfg in groups.items():
-                        if groupCfg['type'] == 'mc':
-                            handle.write(f"\t\t\t('{group}', "+"{")
-                            color = colorTrad(groupCfg['fill-color'])
-                            handle.write(f"'color' : {color}, ")
-                            if 'fill-type' in groupCfg.keys():
-                                handle.write(f"'fillStype' : {groupCfg['fill-type']}, ")
-                            else:
-                                handle.write("'fillStype' : 1001, ")
-                            handle.write(f"'label': '{groupCfg['legend']}', ")
-                            handle.write("'make border' : True}),\n")
-                    handle.write("\t\t\t]\n\t\t),\n")
-                    handle.write("\t\t'procs_plot_options_sig' : OrderedDict(\n\t\t\t[\n")
-                    for group,groupCfg in groups.items():
-                        if groupCfg['type'] == 'signal':
-                            if 'hide' in groupCfg.keys() and groupCfg['hide']:
-                                continue
-                            handle.write(f"\t\t\t('{group}', "+"{")
-                            color = colorTrad(groupCfg['line-color'])
-                            handle.write(f"'color' : {color}, ")
-                            if 'fill-type' in groupCfg.keys():
-                                handle.write(f"'fillStype' : {groupCfg['fill-type']}, ")
-                            else:
-                                handle.write("'fillStype' : 3351, ")
-                            handle.write(f"'label': '{groupCfg['legend']}', ")
-                            if 'scale' in groupCfg.keys():
-                                handle.write(f"'scaleBy': {groupCfg['scale']}, ")
-                            handle.write("'scaleBy' : 1.,")
-                            handle.write("'make border' : True}),\n")
-                    handle.write("\t\t\t]\n\t\t),\n")
-                    handle.write("\t},")
-            handle.write("}")
-        logging.info(f"Generated dat dict file {filePath}")
-
 
     @staticmethod
     def writeSbatchCommand(mainDir,log=False,params={},args={}):
