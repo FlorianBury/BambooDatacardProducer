@@ -216,20 +216,35 @@ class Quantile(Rebin):
             raise RuntimeError("Quantile edges not increasing ["+",".join([str(q[i]) for i in range(q.shape[0])])+"]")
         # Process histograms #
         nph = self._processHist(h)
-        x = (nph.e[:-1]+nph.e[1:])/2
+        nbins = q.shape[0] - 1 
         if nph.w[nph.w>0].shape[0] >= q.shape[0]:
+            self.ne = nph.e[0]
+            if nph.w[0] > q[1] * nph.w.sum(): # First bin has already more than first quantile bin
+                logging.warning(f'First bin content higher than first quantile : {nph.w[0]} > {q[1] * nph.w.sum()} [quantile = {q[1]}], will use its edge and rescale the quantiles for the rest of the histogram')
+                # Add first bin as new edge #
+                self.ne = np.r_[self.ne,nph.e[1]]
+                # Remove the first bin for the rest #
+                nph = nph.split(np.r_[nph.e[0],nph.e[1],nph.e[-1]])[1]
+                # Rescale the quantiles #
+                q = np.r_[0,np.cumsum(np.diff(q[1:])*1/(1-q[1]))]
+
+            x = (nph.e[:-1]+nph.e[1:])/2
             nx = self.rebin_method(x[nph.w>0],nph.w[nph.w>0],q)
             idx = np.digitize(nx, nph.e) - 1
-            self.ne = np.r_[nph.e[0], nph.e[idx], nph.e[-1]]
+            self.ne = np.r_[self.ne,nph.e[idx],nph.e[-1]]
+            self.ne,counts = np.unique(self.ne,return_counts=True)
+            if (counts>1).any():
+                logging.warning(f'There were repetitions in the new binning : {ne}')
         elif nph.w[w>0].shape[0] == 0:   
             self.ne = np.array([e[0],e[-1]])
         else:
             idx = np.digitize(x[nph.w>0], e) - 1
             self.ne = np.r_[nph.e[0], nph.e[idx], nph.e[-1]]
         # Make sure there are no zero-width bins #
-        self.ne = np.unique(self.ne)
+        if self.ne.shape[0] != nbins + 1:
+            raise RuntimeError(f'Error in quantile, hist will have {self.ne.shape[0]-1} bins, but you asked for {nbins} : bins = {self.ne}')
+            # Because can be a problem for combination
         logging.debug(f'Found binning : {self.ne}')
-
 
     @staticmethod
     def rebin_method(x, w, q):
