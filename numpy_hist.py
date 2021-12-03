@@ -312,53 +312,74 @@ class NumpyHist:
                 If any is None, no splitting along this axis
             axis : 'x'|'y' decides in which order to return the list of new 2D hists
         """
-        if self.ndim != 2:
-            raise NotImplementedError(f'Projection in dimension {self.ndim} is not implemented')
-        if axis not in ['x','y']:
-            raise RuntimeError(f'Unknow axis {axis}')
-        # Check the axes :
-        if x_edges is None:
-            x_edges = np.array([self._e[0][0],self._e[0][-1]])
+        if self.ndim == 1:
+            if axis != 'x': 
+                raise ValueError('Splittign a 1D histogram can only work in x direction')
+            if x_edges is None:
+                x_edges = np.array([self._e[0][0],self._e[0][-1]])
+            else:
+                if not isinstance(x_edges,np.ndarray):
+                    x_edges = np.array(x_edges)
+            # Get centers of bins #
+            centers = (self._e[1:] + self._e[:-1]) / 2
+            # Get where centers go in new binning #
+            idx = np.digitize(centers,x_edges) - 1 
+            # Get limits of the new bins #
+            lims = np.where(idx[:-1] != idx[1:])[0] + 1 
+            # Split #
+            ws  = np.split(self._w,lims,axis=0)
+            s2s = np.split(self._s2,lims,axis=0)
+            nes = self._splitEdges(self._e,lims)
+            nphs = [NumpyHist(nes[i],ws[i],s2s[i]) for i in range(len(ws))]
+        elif self.ndim == 2:
+            if axis not in ['x','y']:
+                raise RuntimeError(f'Unknow axis {axis}')
+            # Check the axes :
+            if x_edges is None:
+                x_edges = np.array([self._e[0][0],self._e[0][-1]])
+            else:
+                if not isinstance(x_edges,np.ndarray):
+                    x_edges = np.array(x_edges)
+                self.compareRebinAxes(self._e[0],x_edges)
+            if y_edges is None:
+                y_edges = np.array([self._e[1][0],self._e[1][-1]])
+            else:
+                if not isinstance(y_edges,np.ndarray):
+                    y_edges = np.array(y_edges)
+                self.compareRebinAxes(self._e[1],y_edges)
+            # Get centers of bins #
+            x_centers = (self._e[0][1:] + self._e[0][:-1]) / 2
+            y_centers = (self._e[1][1:] + self._e[1][:-1]) / 2
+
+            # Get where centers go in new binning #
+            idx_x = np.digitize(x_centers,x_edges) - 1 
+            idx_y = np.digitize(y_centers,y_edges) - 1
+
+            # Get limits of the new bins #
+            x_lims = np.where(idx_x[:-1] != idx_x[1:])[0] + 1 
+            y_lims = np.where(idx_y[:-1] != idx_y[1:])[0] + 1
+        
+            # Splitting #
+            ws  = self._splitArray(self._w,x_lims,y_lims,axis)
+            s2s = self._splitArray(self._s2,x_lims,y_lims,axis)
+                # list of split, x is major split, y is minor
+
+            # Make edges #
+            nx_edges = self._splitEdges(self._e[0],x_lims)
+            ny_edges = self._splitEdges(self._e[1],y_lims)
+
+            # Make list of NumpyHist #
+            if axis == 'x':
+                nphs = [NumpyHist([ex,ey],ws[ix][iy],s2s[ix][iy],self._name)
+                            for ix,ex in enumerate(nx_edges)
+                            for iy,ey in enumerate(ny_edges)]
+            if axis == 'y':
+                nphs = [NumpyHist([ex,ey],ws[iy][ix],s2s[iy][ix],self._name)
+                            for iy,ey in enumerate(ny_edges)
+                            for ix,ex in enumerate(nx_edges)]
+
         else:
-            if not isinstance(x_edges,np.ndarray):
-                x_edges = np.array(x_edges)
-            self.compareRebinAxes(self._e[0],x_edges)
-        if y_edges is None:
-            y_edges = np.array([self._e[1][0],self._e[1][-1]])
-        else:
-            if not isinstance(y_edges,np.ndarray):
-                y_edges = np.array(y_edges)
-            self.compareRebinAxes(self._e[1],y_edges)
-        # Get centers of bins #
-        x_centers = (self._e[0][1:] + self._e[0][:-1]) / 2
-        y_centers = (self._e[1][1:] + self._e[1][:-1]) / 2
-
-        # Get where centers go in new binning #
-        idx_x = np.digitize(x_centers,x_edges) - 1 
-        idx_y = np.digitize(y_centers,y_edges) - 1
-
-        # Get limits of the new bins #
-        x_lims = np.where(idx_x[:-1] != idx_x[1:])[0] + 1 
-        y_lims = np.where(idx_y[:-1] != idx_y[1:])[0] + 1
-    
-        # Splitting #
-        ws  = self._splitArray(self._w,x_lims,y_lims,axis)
-        s2s = self._splitArray(self._s2,x_lims,y_lims,axis)
-            # list of split, x is major split, y is minor
-
-        # Make edges #
-        nx_edges = self._splitEdges(self._e[0],x_lims)
-        ny_edges = self._splitEdges(self._e[1],y_lims)
-
-        # Make list of NumpyHist #
-        if axis == 'x':
-            nphs = [NumpyHist([ex,ey],ws[ix][iy],s2s[ix][iy],self._name)
-                        for ix,ex in enumerate(nx_edges)
-                        for iy,ey in enumerate(ny_edges)]
-        if axis == 'y':
-            nphs = [NumpyHist([ex,ey],ws[iy][ix],s2s[iy][ix],self._name)
-                        for iy,ey in enumerate(ny_edges)
-                        for ix,ex in enumerate(nx_edges)]
+            raise NotImplementedError(f'Split in dimension {self.ndim} is not implemented')
 
         return nphs
 
@@ -366,7 +387,7 @@ class NumpyHist:
     def _splitArray(arr,x_lims,y_lims,axis):
         """
             Helper to split an array based on the limits in x and y axes
-            axis determins what order to return the list
+            axis determines what order to return the list
         """
         if axis == 'x':
             return [[splitxy for splitxy in np.split(splitx,y_lims,axis=1)]
