@@ -1747,7 +1747,9 @@ class Datacard:
                         continue
                     histMin[histName] = min(histMin[histName],getMinNonEmptyBins(content[histName][group]['nominal']))
                     histMax[histName] = max(histMax[histName],content[histName][group]['nominal'].GetMaximum())
-            histMax[histName] = max(hstack.GetMaximum(),histMax[histName])
+            histMax[histName] = max(hstack.GetStack().Last().GetMaximum(),histMax[histName])
+            histMin[histName] = min(getMinNonEmptyBins(hstack.GetStack().Last()),histMax[histName])
+                # Last element of stack is the sum
 
         # Files informations #
         config['files'] = {}
@@ -1805,14 +1807,13 @@ class Datacard:
             config['plots'][h1n]['sort-by-yields'] = True
             config['plots'][h1n]['show-overflow'] = True
             config['plots'][h1n]['x-axis-range'] = [hist.GetXaxis().GetBinLowEdge(1),hist.GetXaxis().GetBinUpEdge(hist.GetNbinsX())] 
-                # Adjust the axis range (in case it changed)
             config['plots'][h1n]['y-axis-format'] = "%1%"
                 # No Events/ [bin width] (can be misunderstood)
 
             # Adjust the y axis #
             if histMax[h1] > 0.:
-                config['plots'][h1n]['y-axis-range'] = [0.,histMax[h1]]
-                config['plots'][h1n]['log-y-axis-range'] = [histMin[h1],histMax[h1]*100]
+                config['plots'][h1n]['y-axis-range'] = [0.,histMax[h1]*1.3]
+                config['plots'][h1n]['log-y-axis-range'] = [histMin[h1]*0.1,histMax[h1]*1000]
                 config['plots'][h1n]['ratio-y-axis-range'] = [0.8,1.2]
             # Add labels #
             if 'labels' in config['plots'][h1n].keys():
@@ -1845,7 +1846,7 @@ class Datacard:
                                 extraItems['lines'][idx] = int(np.abs(original_bin_positions - extraItems['lines'][idx]).argmin() + 1)
                     # Draw lines #
                     for idx in range(len(extraItems['lines'])):
-                        extraItems['lines'][idx] = [[extraItems['lines'][idx],0.],[extraItems['lines'][idx],histMax[h1]*1.1]]
+                        extraItems['lines'][idx] = [[extraItems['lines'][idx],0.],[extraItems['lines'][idx],histMax[h1]]]
                     config['plots'][h1n].update(extraItems)
             # If user put some options in the config, add them #
             if 'plots' in self.plotIt:
