@@ -17,6 +17,7 @@ import logging
 import subprocess
 import collections
 import importlib
+import itertools
 import numpy as np
 import math
 import multiprocessing as mp
@@ -1748,7 +1749,7 @@ class Datacard:
                     histMin[histName] = min(histMin[histName],getMinNonEmptyBins(content[histName][group]['nominal']))
                     histMax[histName] = max(histMax[histName],content[histName][group]['nominal'].GetMaximum())
             histMax[histName] = max(hstack.GetStack().Last().GetMaximum(),histMax[histName])
-            histMin[histName] = min(getMinNonEmptyBins(hstack.GetStack().Last()),histMax[histName])
+            histMin[histName] = min(getMinNonEmptyBins(hstack.GetStack().Last()),histMin[histName])
                 # Last element of stack is the sum
 
         # Files informations #
@@ -1981,60 +1982,83 @@ class Datacard:
             if 'bins' in combineCfg.keys() and list(txtPaths.keys()) == ['all']:
                 raise RuntimeError(f'You asked for a single datacard text file, but filter on bins for the command mode {combineMode}')
 
+            # Additional datacards from extern #
+            if 'extern' in combineCfg.keys():
+                def moveFileToOutput(initialFiles,outputDir):
+                    if isinstance(initialFiles,dict):
+                        outputFiles = {}
+                        for key,values in initialFiles.items():
+                            outputFiles[str(key)] = moveFileToOutput(values,outputDir)
+                    elif isinstance(initialFiles, list):
+                        outputFiles = []
+                        for item in initialFiles:
+                            outputFiles.extend(moveFileToOutput(item,outputDir))
+                    elif isinstance(initialFiles, str):
+                        interFiles = glob.glob(initialFiles)
+                        outputFiles = []
+                        for initf in interFiles:
+                            finalf = os.path.join(outputDir,os.path.basename(initf))
+                            if not os.path.exists(finalf):
+                                logging.info(f'Moving {initf}')
+                                shutil.copyfile(initf,finalf)
+                            outputFiles.append(finalf)
+                    else:
+                        raise RuntimeError(f'Type {type(initialFiles)} not understood')
+                    return outputFiles
+                                           
+                externTxtFiles = moveFileToOutput(combineCfg['extern']['txtFiles'],self.outputDir)
+                externRootFiles = moveFileToOutput(combineCfg['extern']['rootFiles'],self.outputDir)
+
+            # Select bins #
             binsToUse = []
             if 'bins' in combineCfg.keys():
                 combine_bins = 'combine_bins' in combineCfg.keys() and combineCfg['combine_bins']
                 combine_eras = 'combine_eras' in combineCfg.keys() and combineCfg['combine_eras']
                 split_bins   = 'split_bins' in combineCfg.keys() and combineCfg['split_bins'] 
                 split_eras   = 'split_eras' in combineCfg.keys() and combineCfg['split_eras']
-                if (combine_bins and len(combineCfg['bins']) > 1) and (combine_eras and len(self.era) > 1):
-                    binsToUse.append([f'{b}_{era}' for b in combineCfg['bins'] for era in self.era])
+                if len(combineCfg['bins']) > 1 and not combine_bins and not split_bins:
+                    raise RuntimeError('Several bins defined, please mark either `combine_bins`, `split_bins`, or both as `True`')
+                if len(self.era) > 1 and not combine_eras and not split_eras:
+                    raise RuntimeError('Several eras defined, please mark either `combine_eras`, `split_eras`, or both as `True`')
 
-                if combine_bins and len(combineCfg['bins']) > 1:
-                    if split_eras:
-                        binsToUse.extend([[f'{b}_{era}' for b in combineCfg['bins']] for era in self.era])
-                    else:
-                        binsToUse.append([f'{b}_{era}' for b in combineCfg['bins'] for era in self.era])
-                if combine_eras and len(self.era) > 1:
+                # Get contributions separately #
+                if len(combineCfg['bins']) > 1:
+                    categories = []
+                    if combine_bins:
+                        categories.append(combineCfg['bins'])
                     if split_bins:
-                        binsToUse.extend([[f'{b}_{era}' for era in self.era] for b in combineCfg['bins']])
-                    else:
-                        binsToUse.append([f'{b}_{era}' for era in self.era for b in combineCfg['bins']])
-                     
-                if split_bins and split_eras:
-                    binsToUse.extend([[f'{b}_{era}'] for b in combineCfg['bins'] for era in self.era])
-                if split_bins and not split_eras:
-                    binsToUse.extend([[f'{b}_{era}' for era in self.era]for b in combineCfg['bins']])
-                if not split_bins and split_eras:
-                    binsToUse.extend([[f'{b}_{era}' for b in combineCfg['bins']] for era in self.era])
+                        categories.extend([[b] for b in combineCfg['bins']])
+                else:
+                    categories = combineCfg['bins']
+                if 'extern' in combineCfg.keys() and len(categories) == 0:
+                    # Full extern run
+                    categories = [[]]
+                if len(self.era) > 1:
+                    eras = []
+                    externs = []
+                    if combine_eras:
+                        eras.append(self.era)
+                    if split_eras:
+                        eras.extend([[era] for era in self.era])
+                else:
+                    eras = self.era
 
-                if not combine_bins and not combine_eras and not split_bins and not split_eras:
-                    binsToUse = [[f'{b}_{era}' for b in combineCfg['bins'] for era in self.era]]
-
+                # Combine them into bins #
+                binsToUse = []
+                for cat,era in itertools.product(categories,eras):
+                    bins = []
+                    if len(cat) > 0:
+                        bins = [f'{c}_{e}' for c in cat for e in era]
+                    # Add extern #
+                    if 'extern' in combineCfg.keys():
+                        if isinstance(externTxtFiles,dict):
+                            bins.extend([f for e in era for f in externTxtFiles[e]])
+                        else:
+                            bins.extend(externTxtFiles)
+                    binsToUse.append(bins)
             else:
                 binsToUse.append('all')
             
-            # Additional datacards from extern #
-            if 'extern' in combineCfg.keys():
-                # Add the bin from extern datacard #
-                for i in range(len(binsToUse)):
-                    #binsToUse[i].extend(combineCfg['extern']['bins'])
-                    binsToUse[i].append('extern')
-                # Copy file to output directory #
-                externTxtFiles = combineCfg['extern']['txtFiles']
-                externRootFiles = combineCfg['extern']['rootFiles']
-
-                def moveFileToOutput(initialFiles):
-                    if not isinstance(initialFiles,list) and not isinstance(initialFiles,tuple):
-                        initialFiles = [initialFiles]
-                    for initialFile in initialFiles:
-                        for initf in glob.glob(initialFile):
-                            finalf = os.path.join(self.outputDir,os.path.basename(initf))
-                            if not os.path.exists(finalf):
-                                shutil.copyfile(initf,finalf)
-
-                moveFileToOutput(externRootFiles)
-                moveFileToOutput(externTxtFiles)
 
             # Loop over all the bin combinations (can be all of the one and/or one by one) #
             subdirBinPaths = []
@@ -2053,16 +2077,19 @@ class Datacard:
                         for era in self.era:
                             if str(era) in binName:
                                 eras_in_bins.add(str(era))
-                                cats_in_bins.add(binName.replace(f'_{era}',''))
+                                if not os.path.exists(binName): # Not extern datacard
+                                    cats_in_bins.add(binName.replace(f'_{era}',''))
 
                     if len(binNames) == 1:
                         binSuffix = binNames[0]
+                        if 'extern' in combineCfg.keys():
+                            binSuffix = f'combination_{list(eras_in_bins)[0]}'
                     else:
                         # Check if one cat / several eras 
                         if len(cats_in_bins) == 1 and len(eras_in_bins) > 1:
                             binSuffix = f'combination_{list(cats_in_bins)[0]}'
                         # Check if several cats / one era
-                        elif len(cats_in_bins) > 1 and len(eras_in_bins) == 1:
+                        elif len(cats_in_bins) != 1 and len(eras_in_bins) == 1:
                             binSuffix = f'combination_{list(eras_in_bins)[0]}'
                         # Check if several cats / several eras
                         else:
@@ -2087,11 +2114,8 @@ class Datacard:
                     txtPathsForCombination = list(txtPaths.values())
                 else:
                     for binName in binNames:
-                        if binName == 'extern':
-                            if isinstance(combineCfg['extern']['txtFiles'],list) or isinstance(combineCfg['extern']['txtFiles'],tuple):
-                                txtPathsForCombination.extend(combineCfg['extern']['txtFiles'])
-                            else:
-                                txtPathsForCombination.append(combineCfg['extern']['txtFiles'])
+                        if os.path.exists(binName): # Extern datacard 
+                            txtPathsForCombination.append(binName)
                         elif binName not in txtPaths.keys():
                             raise RuntimeError(f'{binName} not in hist content')
                         else:

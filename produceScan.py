@@ -302,7 +302,7 @@ class Scan:
                         subdirs[subkey] = [subval.format(**point['custom']) for subval in subvalues]
 
                 pool_cmds.append((point['command'],     # command 
-                                  combine_args,    # combine args 
+                                  combine_args,         # combine args 
                                   subdirs,              # subdirs
                                   self.plotIt,          # plotIt
                                   self.debug))          # debug
@@ -315,14 +315,19 @@ class Scan:
         idx = 0
         for icurve,curveName in enumerate(self.curves.keys()):
             for ipoint in range(len(self.curves[curveName]['points'])):
+                result = None
+                custom = None
+                if 'values' in self.curves[curveName]['points'][ipoint].keys():
+                    combineMode = list(self.curves[curveName]['modes'])[0]
+                    subname = ''
+                    result = {combineMode:{subname:self.curves[curveName]['points'][ipoint]['values']}}
                 if 'command' in self.curves[curveName]['points'][ipoint].keys():
                     result = results[idx]
-                    presult = {}  # processed result
                     # If custom defined, save it to reverse #
                     if 'custom' in self.curves[curveName]['points'][ipoint].keys():
                         custom = self.curves[curveName]['points'][ipoint]['custom']
-                    else:
-                        custom = None
+                if result is not None:
+                    presult = {}  # processed result
                     # Loop through results dict # 
                     for combineMode in result.keys():
                         combineType = self.combine[combineMode]
@@ -346,6 +351,8 @@ class Scan:
                     self.curves[curveName]['points'][ipoint]['results'] = presult
                     # Iterate through results #
                     idx += 1
+                else:
+                    raise ValueError(f'Curve name {curveName} at point {ipoint}, no result produced : is there a `values` or command `entry` ?')
 
     def produceGraphs(self):
         for curveName in self.curves.keys():
