@@ -82,6 +82,7 @@ class Processes(MutableMapping):
         return max(*[len(key) for key in self.__iter__()],
                    *[len(systName) for systName in self.getAllSystNamesAndTypes().keys()],
                    len(self.binName),
+                   *[len(str(int(process.rate)))+8 for process in self.store.values()],
                    len('observation')) + 5 
                    
     def getAllSystNamesAndTypes(self):
@@ -155,17 +156,17 @@ class Writer:
         card.write(f"{dashes}{sep}")
 
         # Processes #
-        card.write("bin".ljust(spaces*2) \
+        card.write("bin".ljust(spaces) \
             + "".join([binName.ljust(spaces)  for binName,processes in self.processes.items() for _ in processes.values()]) \
             + sep)
-        card.write("process".ljust(spaces*2) \
+        card.write("process".ljust(spaces) \
             + "".join([process.name.ljust(spaces) for processes in self.processes.values() for process in processes.values()]) \
             + sep)
-        card.write("process".ljust(spaces*2) \
+        card.write("process".ljust(spaces) \
             + "".join([str(process.index).ljust(spaces) for processes in self.processes.values() for process in processes.values()]) \
             + sep)
-        card.write("rate".ljust(spaces*2) \
-            + "".join(["{:0.10f}".format(process.rate).ljust(spaces) for processes in self.processes.values() for process in processes.values()]) \
+        card.write("rate".ljust(spaces) \
+            + "".join(["{:{}.8f}".format(process.rate,spaces).ljust(spaces) for processes in self.processes.values() for process in processes.values()]) \
             + sep)
         card.write(f"{dashes}{sep}")
 
@@ -175,7 +176,6 @@ class Writer:
                      + systType.ljust(spaces) \
                      + "".join([str(val).ljust(spaces) for processes in self.processes.values() for val in processes.getSystValuesPerProcess(systName)]) \
                      + sep)
-            
 
         # Footer #
         for line in self.footer:
