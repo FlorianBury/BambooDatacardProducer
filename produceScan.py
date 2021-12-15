@@ -148,28 +148,33 @@ class Scan:
                 single_limit = False
                 # Find the graphs #
                 for line,names in plotCfg['curves'].items():
-                    lines.append(line)
                     assert len(names) == 3
+                    if names[0] not in self.curves.keys() or not names[1] in self.curves[names[0]]['graphs'].keys():
+                        print (f'Curve {names} not found in save')
+                        continue
+                    lines.append(line)
                     curveName,combineMode,subname = names
                     combineType = self.combine[combineMode]
                     if len(plotCfg['curves']) == 1 and combineType == 'limits':
                         single_limit = True
                         # Single limit plot #
-                        graphs = self.curves[names[0]]['graphs'][names[1]][names[2]]
-                        if 'labelConv' in self.curves[names[0]].keys():
-                            labelConv = self.curves[names[0]]['labelConv'][names[1]][names[2]]
+                        graphs = self.curves[curveName]['graphs'][combineMode][subname]
+                        if 'labelConv' in self.curves[curveName].keys():
+                            labelConv = self.curves[curveName]['labelConv'][combineMode][subname]
                         else:
                             labelConv = None
                     else:
                         # Multi graphs plots #
-                        if len(self.curves[names[0]]['graphs'][names[1]]) > 0:
+                        if len(self.curves[curveName]['graphs'][combineMode]) > 0:
                             if combineType == 'limits':
-                                graph = self.curves[names[0]]['graphs'][names[1]][names[2]][1]
+                                graph = self.curves[curveName]['graphs'][combineMode][subname][1]
                             if combineType == 'gof':
-                                graph = self.curves[names[0]]['graphs'][names[1]][names[2]][0]
+                                graph = self.curves[curveName]['graphs'][combineMode][subname][0]
                         else:
                             graph = None
                         graphs.append(graph)
+                if len(graphs) == 0:
+                    continue
                 # Check for attributes #
                 if 'options' in plotCfg.keys():
                     options = plotCfg['options']
@@ -201,7 +206,6 @@ class Scan:
                                             title       = title,
                                             name        = name)
         # Save as CSV #
-    #def saveCSV(csv_path,graphs,headers):
         for curveName in self.curves.keys():
             graphs = self.curves[curveName]
             for combineMode in self.curves[curveName]['graphs'].keys():
@@ -317,6 +321,7 @@ class Scan:
             for ipoint in range(len(self.curves[curveName]['points'])):
                 result = None
                 custom = None
+                scale  = 1.
                 if 'values' in self.curves[curveName]['points'][ipoint].keys():
                     combineMode = list(self.curves[curveName]['modes'])[0]
                     subname = ''
@@ -326,6 +331,8 @@ class Scan:
                     # If custom defined, save it to reverse #
                     if 'custom' in self.curves[curveName]['points'][ipoint].keys():
                         custom = self.curves[curveName]['points'][ipoint]['custom']
+                if 'scale' in self.curves[curveName].keys():
+                    scale = self.curves[curveName]['scale']
                 if result is not None:
                     presult = {}  # processed result
                     # Loop through results dict # 
@@ -343,10 +350,18 @@ class Scan:
                             # Format the results #
                             if combineType == 'limits':
                                 # Use floats for both keys and values #
-                                presult[combineMode][subname] = {float(k):float(v) for k,v in subres.items()}
+                                presult[combineMode][subname] = {float(k):float(v)*scale for k,v in subres.items()}
                             if combineType == 'gof':
                                 # From toys and data, produce p value #
-                                presult[combineMode][subname] = self.produceGofValue(subres)
+                                if isinstance(subres['data'],list):
+                                    for item in subres['data']:
+                                        name = item['name']
+                                        if custom is not None:
+                                            for key,val in custom.items():
+                                                name = name.replace(str(val),f'{{{key}}}')
+                                        presult[combineMode][name] = self.produceGofValue(item)
+                                else:
+                                    presult[combineMode][subname] = self.produceGofValue(subres)
                     # Add to the curves content #
                     self.curves[curveName]['points'][ipoint]['results'] = presult
                     # Iterate through results #
