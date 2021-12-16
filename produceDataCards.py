@@ -929,15 +929,6 @@ class Datacard:
                         hup.SetBinContent(i,0.00001)
                         hdown.SetBinContent(i,0.00001)
 
-        # TODO : check below -> remove when production
-#        for i in range(1,hnom.GetNbinsX()+1):
-#            hnom.SetBinError(i,0.)
-#            if hup is not None:
-#                hup.SetBinError(i,0.)
-#            if hdown is not None:
-#                hdown.SetBinError(i,0.)
-#        ####
-
     def applyCorrectionAfterAggregation(self):
         for corrConfig in self.histCorrections:
             if ":" not in corrConfig['module']:
@@ -956,23 +947,38 @@ class Datacard:
                     continue
                 catCfg = corrConfig['categories'][cat_no_era]
                 logging.info(f'... Histogram {cat:20s} in {cls.group} group')
-                # Check if group is there #
-                if cls.group not in self.content[cat].keys():
-                    continue
-                # Add potential additional shapes #
-                # To be done before the correction because syst will be corrected twice otherwise
-                additional_syst = {}
-                if hasattr(cls,'additional') and self.use_syst:
-                    additional_syst = cls.additional(self.content[cat][cls.group]['nominal'],**catCfg)
-                # Correct nominal and all syst hists #
-                if hasattr(cls,'modify'):
-                    logging.info(f'\t\t-> applying corrections with key in file {catCfg["key"]}')
-                    for hist in self.content[cat][cls.group].values():
-                        cls.modify(hist,**catCfg)
-                # Add the additional syst to the content #
-                for key in additional_syst.keys():
-                    logging.info(f'\t\t-> Adding systematic shape {key}')
-                self.content[cat][cls.group].update(additional_syst)
+                # Check if applicable #
+                if cls.group is not None:
+                    if isinstance(cls.group,str):
+                        if cls.group not in self.content[cat].keys():
+                            continue
+                        groups = [cls.group]
+                    elif isinstance(cls.group,list):
+                        if len(set(cls.group).intersection(set(self.content[cat].keys()))) == 0:
+                            continue
+                        groups = cls.group
+                    else:
+                        raise ValueError(f'Class {clsName} attribute `group` type {type(cls.group)} not understood')
+                else:
+                    groups = list(self.content[cat].keys())
+                # Group loop #
+                for group in groups:
+                    logging.info(f'\tGroup {group}')
+                    # Add potential additional shapes #
+                    # To be done before the correction because syst will be corrected twice otherwise
+                    additional_syst = {}
+                    if hasattr(cls,'additional') and self.use_syst:
+                        additional_syst = cls.additional(self.content[cat][group]['nominal'],cat,group,**catCfg)
+                    # Correct nominal and all syst hists #
+                    if hasattr(cls,'modify'):
+                        logging.info(f'\t\t-> applying corrections with key in file {catCfg["key"]}')
+                        for hist in self.content[cat][group].values():
+                            cls.modify(hist,cat,group,**catCfg)
+                    # Add the additional syst to the content #
+                    for key,h in additional_syst.items():
+                        intChange = 2*(h.Integral()-self.content[cat][group]['nominal'].Integral())/(h.Integral()+self.content[cat][group]['nominal'].Integral()+1e-9)
+                        logging.info(f'\t\t-> Adding systematic shape {key:30s} [{intChange:5.2f}%]')
+                    self.content[cat][group].update(additional_syst)
             logging.info('... done')
 
     def applyRegrouping(self):

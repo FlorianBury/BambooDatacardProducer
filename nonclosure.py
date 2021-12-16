@@ -15,10 +15,6 @@ class NonClosureDY:
         return 'DY'
 
     @property
-    def sample(self):
-        return None
-
-    @property
     def categories(self):
         return self.content.keys()
 
@@ -47,21 +43,21 @@ class NonClosureDY:
         return lambda x : (coeffs[0] - np.sqrt(eigenVals[1]) * eigenVecs[0][1]) \
                         + (coeffs[1] - np.sqrt(eigenVals[1]) * eigenVecs[1][1]) * x
 
-    def modify(self,h,key,**kwargs):
+    def modify(self,h,cat,group,**kwargs):
         assert isinstance(h,ROOT.TH1)
-        if key not in self.categories:
-            raise RuntimeError(f'Could not find key `{key}` in {self.path_json}')
-        coefficients = self.content[key]['coefficients']
+        if cat not in self.categories:
+            raise RuntimeError(f'Could not find cat `{cat}` in {self.path_json}')
+        coefficients = self.content[cat]['coefficients']
         f = self._fit(coefficients)
         for i in range(1,h.GetNbinsX()+1):
             x = h.GetXaxis().GetBinCenter(i)
             y = h.GetBinContent(i)
             h.SetBinContent(i,y*f(x))
 
-    def additional(self,h,key,systName,**kwargs):
+    def additional(self,h,cat,group,systName,**kwargs):
         assert isinstance(h,ROOT.TH1)
-        coefficients = self.content[key]['coefficients']
-        covariance   = np.array(self.content[key]['covariance'])
+        coefficients = self.content[cat]['coefficients']
+        covariance   = np.array(self.content[cat]['covariance'])
         assert covariance.shape == (2,2)
         eigenValues , eigenVectors = np.linalg.eigh(covariance)
         h_shape1_up   = h.Clone(f"{h.GetName()}_{systName}_shape1_up")
@@ -117,24 +113,23 @@ class NonClosureFake:
     def _slope_down(slope):
         return lambda x : 1 - max(min(slope*x,1.),-1.)
 
-    def modify(self,h,key,**kwargs):
+    #def modify(self,h,cat,group,**kwargs):
         # Decision to only use the norm effect and not the slope 
-        pass
         #assert isinstance(h,ROOT.TH1)
-        #if key not in self.categories:
-        #    raise RuntimeError(f'Could not find key `{key}` in {self.path_json}')
-        #cog = self.content[key]['cog']
+        #if cat not in self.categories:
+        #    raise RuntimeError(f'Could not find cat `{cat}` in {self.path_json}')
+        #cog = self.content[cat]['cog']
 
         #for i in range(1,h.GetNbinsX()+1):
         #    x = h.GetXaxis().GetBinCenter(i)-cog
         #    y = h.GetBinContent(i)
         #    h.SetBinContent(i,y*f(x))
 
-    def additional(self,h,key,systName,**kwargs):
+    def additional(self,h,cat,group,systName,**kwargs):
         assert isinstance(h,ROOT.TH1)
-        cog   = self.content[key]['cog']
-        nom   = self.content[key]['nom']
-        slope = self.content[key]['slope']
+        cog   = self.content[cat]['cog']
+        nom   = self.content[cat]['nom']
+        slope = self.content[cat]['slope']
         
         h_nom_up     = h.Clone(f"{h.GetName()}_{systName}_nom_up")
         h_nom_down   = h.Clone(f"{h.GetName()}_{systName}_nom_down")
@@ -163,3 +158,36 @@ class NonClosureFake:
 
         return {f'{systName}_nomUp'     : h_nom_up,
                 f'{systName}_nomDown'   : h_nom_down}
+
+class UnderlyingEvent:
+    def __init__(self,**kwargs):
+        self.path_json = os.path.abspath(os.path.join(os.path.dirname(__file__),kwargs['path_json']))
+        with open(self.path_json,'r') as handle:
+            self.content = json.load(handle)
+
+    @property
+    def group(self):
+        return None 
+        # Either use the file, or put a nominal shape
+
+
+    def additional(self,h,cat,group,systName,**kwargs):
+        h_up = h.Clone(f"{h.GetName()}_{systName}_up")
+        h_down = h.Clone(f"{h.GetName()}_{systName}_down")
+
+        if group in self.content[cat].keys():
+            if isinstance(h,ROOT.TH1):
+                for i in range(1,h.GetNbinsX()+1):
+                    x = h.GetXaxis().GetBinCenter(i)
+                    y = h.GetBinContent(i)
+                    for binCfg in self.content[cat][group]:
+                        if x > binCfg['bin'][0] and x < binCfg['bin'][1]:
+                            h_up.SetBinContent(i,y*binCfg['up'])
+                            h_down.SetBinContent(i,y*binCfg['down'])
+                            break
+            else:
+                raise ValueError(f'Histogram type {h.__class__.__name__} from systematic {systName} not inderstood')
+
+        return {f'{systName}Up'    : h_up,
+                f'{systName}Down'  : h_down}
+
