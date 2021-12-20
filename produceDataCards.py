@@ -974,10 +974,11 @@ class Datacard:
                         logging.info(f'\t\t-> applying corrections with key in file {catCfg["key"]}')
                         for hist in self.content[cat][group].values():
                             cls.modify(hist,cat,group,**catCfg)
+                    N = max([len(key) for key in additional_syst.keys()]) + 5 
                     # Add the additional syst to the content #
                     for key,h in additional_syst.items():
                         intChange = 2*(h.Integral()-self.content[cat][group]['nominal'].Integral())/(h.Integral()+self.content[cat][group]['nominal'].Integral()+1e-9)
-                        logging.info(f'\t\t-> Adding systematic shape {key:30s} [{intChange:5.2f}%]')
+                        logging.info(f'\t\t-> Adding systematic shape {key:{N}s} [{intChange:+8.3f}%]')
                     self.content[cat][group].update(additional_syst)
             logging.info('... done')
 
