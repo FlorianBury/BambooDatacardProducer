@@ -119,6 +119,7 @@ class Writer:
         self.observations = {binName:-1 for binName in self.binNames}
         self.systNames = {}
         self.footer = []
+        self.useAutoMCStat = ["10", "0", "1"]
 
     def build(self):
         for processes in self.processes.values():
@@ -182,8 +183,9 @@ class Writer:
             card.write(f"{line}{sep}")
 
         # AutoStats #
-        for binName in self.binNames:
-            card.write(f"{binName}".ljust(spaces)+"autoMCStats 10 0 1"+sep)
+        if self.useAutoMCStat is not None:
+            for binName in self.binNames:
+                card.write(f"{binName}".ljust(spaces)+"autoMCStats "+"_".join(self.useAutoMCStat)+sep)
 
 
         card.close()

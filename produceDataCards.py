@@ -215,7 +215,49 @@ class Datacard:
 
     def generatePseudoData(self):
         logging.info('Will use sum of mc samples as pseudodata')
-        mc_samples = [sample for sample,sampleCfg in self.yaml_dict['samples'].items() if sampleCfg['type']=='mc']
+        if any([isinstance(files,dict) for groupCfg in self.groups.values() for files in groupCfg['files'] 
+                                if groupCfg['type'] == 'mc' and isinstance(groupCfg['files'],list)]):
+            # Some groups have conditional MC samples
+            filesPerCat = {'__all__':[]}
+            for group,groupCfg in self.groups.items():
+                if groupCfg['type'] != 'mc':
+                    continue
+                files = copy.deepcopy(groupCfg['files'])
+                if not isinstance(files,list):
+                    files = [files] # Make it always a list
+                for i,f in enumerate(files):
+                    if isinstance(f,str) and f not in filesPerCat['__all__']:
+                        filesPerCat['__all__'].append(f)
+                    if isinstance(f,dict): 
+                        if not 'files' in f.keys():
+                            logging.warning(f'No `files` item in entry {i} of group {group}, will omit it')
+                        elif not 'cat' in f.keys():
+                            logging.warning(f'No `cat` item in entry {i} of group {group}, will omit it')
+                        else:
+                            if isinstance(f['cat'],str):
+                                cat = (f['cat'],)
+                            elif isinstance(f['cat'],list):
+                                cat = tuple(f['cat'])
+                                # Key needs to be immutable
+                            else:
+                                raise RuntimeError(f"Category {f['cat']} type {type(f['cat'])} in entry {i} of group {group} not understood")
+                            if cat in filesPerCat.keys():
+                                filesPerCat[cat].extend(f['files'])
+                            else:
+                                filesPerCat[cat] = f['files']
+            # Make it a files content for the data_obs group from pseudodata #
+            assert len(filesPerCat) > 1 # == 1 means only __all__, and that should not happen
+            mc_samples = []
+            for cat,files in filesPerCat.items():
+                if cat == '__all__':
+                    mc_samples.extend(filesPerCat['__all__'])
+                else:
+                    mc_samples.append({'cat'   : list(cat),
+                                       'files' : files})
+        else:
+            # No conditional -> add all samples in data_obs group as pseudodata
+            mc_samples = [sample for sample,sampleCfg in self.yaml_dict['samples'].items() if sampleCfg['type']=='mc']
+        # Make the group #
         self.groups['data_obs'] = {'files'  : mc_samples,
                                    'legend' : 'pseudo-data',
                                    'type'   : 'data',
@@ -223,9 +265,14 @@ class Datacard:
         self.findGroup(force=True) # Force the recreation of cached sampleToGroup to take into account the change of groups dict
             # One needs the yaml dict to be there as default, and yaml dict has called findGroup
         for mc_sample in mc_samples:
-            if 'data_obs' not in self.findGroup(mc_sample):
-                raise RuntimeError(f'Something ent wrong : sample {mc_sample} not flagged as data_obs for pseudodata')
-        # Need to add to containers #
+            if isinstance(mc_sample,str):
+                files = [mc_sample]
+            if isinstance(mc_sample,dict):
+                files = mc_sample['files']
+            for f in files:
+                if 'data_obs' not in self.findGroup(f):
+                    raise RuntimeError(f'Something went wrong : sample {f} not flagged as data_obs for pseudodata')
+            # Need to add to containers #
         self.initialize()
 
     def loopOverFiles(self):
@@ -259,8 +306,6 @@ class Datacard:
             logging.debug(f'Looking at file {f}')
             # Check if in the group list #
             groups = self.findGroup(sample)
-            if self.pseudodata and 'data_real' in groups:
-                continue
             if len(groups) == 0:
                 logging.warning("Could not find sample %s in group list"%sample)
                 continue
@@ -287,14 +332,14 @@ class Datacard:
             # Add to content by group #
             logging.debug("\tWill be used in groups : ")
             for group in groups:
-                logging.debug(f"\t... {group}")
                 # if several groups, need to fetch for each group 
                 # -> need to have different memory adress
-                self.addSampleToGroup(copy.deepcopy(hist_dict),group)
+                if self.addSampleToGroup(sample,group,copy.deepcopy(hist_dict)):
+                    logging.debug(f"\t... {group}")
             del hist_dict
 
         self.checkForMissingNominals()
-        self.yields = self.getYields(self.content)
+        self.yields = self.getYields()
 
         # Correct for missing systematics #
         for histName in self.systPresent.keys():
@@ -318,15 +363,25 @@ class Datacard:
                     hist.SetName(name)
                     hist.SetTitle(name)
 
-    def addSampleToGroup(self,hist_dict,group):
+    def addSampleToGroup(self,sample,group,hist_dict):
+        used = False
         for histname,hists in hist_dict.items():
+            # If no hist, continue #
             if len(hists) == 0:
                 continue
+            # If in condition dictionnary, check that it matches at least one condition #
+            if sample in self.condSample.keys():  
+                if not any([self.checkConditional(conditions=cond,group=group,cat=histname) for cond in self.condSample[sample]
+]):                    
+                    continue
+            # Get nominal and add it #
             nominal = hists['nominal']
             if not 'nominal' in self.content[histname][group].keys():
                 self.content[histname][group]['nominal'] = copy.deepcopy(nominal)
             else:
                 self.content[histname][group]['nominal'].Add(nominal)
+            used = True
+            # Add the systematic shape #
             if self.use_syst:
                 for systName in hists.keys():
                     if systName == 'nominal':
@@ -336,14 +391,17 @@ class Datacard:
                         self.content[histname][group][systName] = copy.deepcopy(hist)
                     else:
                         self.content[histname][group][systName].Add(hist)
+        return used
 
     def findGroup(self,sample=None,force=False):
-        """ force entry si to force the recration of the cached sampleToGroup """
+        """ force entry to force the recration of the cached sampleToGroup """
         # Creation of this attribute if not defined already (avoid lengthy recomputations all the time) # 
         if not hasattr(self,'sampleToGroup') or force:
             self.sampleToGroup = {} # Key = sample, value = group 
             self.condSample =  {}   # Key = sample, value = conditions (list of dicts)
+            self.condGroup  =  {}   # Key = group,  value = conditons
             for group in self.groups.keys():
+                self.condGroup[group] = []
                 # Check files attribute # 
                 if 'files' not in self.groups[group]:
                     logging.warning("No `files` item in group {}".format(group))
@@ -354,7 +412,7 @@ class Datacard:
                 if not isinstance(files,list):
                     files = [files]
                 # Conditional group (based on era or category) #
-                if  any([isinstance(f,dict) for f in files]): 
+                if any([isinstance(f,dict) for f in files]): 
                     tmp_files = []
                     for i,f in enumerate(files):
                         if isinstance(f,dict):
@@ -369,18 +427,26 @@ class Datacard:
                                 for add_file in add_files:
                                     if add_file not in self.condSample.keys():
                                         self.condSample[add_file] = []
-                                    self.condSample[add_file].append({k:v for k,v in f.items() if k != 'files'})
+                                    cond = {k:v for k,v in f.items() if k != 'files'}
+                                    self.condGroup[group].append(copy.deepcopy(cond))
+                                    cond['group'] = group
+                                    if cond not in self.condSample[add_file]:
+                                        self.condSample[add_file].append(cond)
                                     if add_file not in tmp_files:
                                         tmp_files.append(add_file)
                         else:
                             tmp_files.append(f)
+                            self.condGroup[group].append({})
                     files = tmp_files
+                else:
+                    self.condGroup[group].append({})
                 # Add the link between sample and group #
                 for f in files:
                     if f in self.sampleToGroup.keys():
                         self.sampleToGroup[f].append(group)
                     else:
                         self.sampleToGroup[f] = [group]
+
         # Search the saved dictionnary #
         if sample is None:
             return None
@@ -447,7 +513,6 @@ class Datacard:
 
     def checkConditional(self,conditions,group,cat):
         """ Check conditions for a give sample in certain category, returns True if OK """
-        
         # Check if there is an era condition #
         if 'era' in conditions.keys() and str(conditions['era']) != str(self.era):
             return False
@@ -497,9 +562,8 @@ class Datacard:
             for datacardname, histnames in self.histConverter.items():
                 # Check if conditional sample #
                 if sample in self.condSample.keys():  
-                    conditions = self.condSample[sample]
-                    if not any([self.checkConditional(condition,self.sampleToGroup[sample],datacardname) \
-                                    for condition in conditions]):
+                    if not any([self.checkConditional(conditions=cond,group=group,cat=datacardname) \
+                                    for group in self.sampleToGroup[sample] for cond in self.condSample[sample]]):
                         # Test all possible conditions for that sample, if any one is matched for the category use it
                         continue
                         
@@ -649,14 +713,23 @@ class Datacard:
                             hist.SetBinContent(i,0)
                             hist.SetBinError(i,0)
 
-    @staticmethod
-    def getYields(content):
+    def getYields(self):
         yields = {}
         err = ctypes.c_double(0.)
-        for histName in content.keys(): 
+        for histName in self.content.keys(): 
             yields[histName] = {}
-            for group in content[histName].keys():
-                h = content[histName][group]['nominal']
+            for group in self.content[histName].keys():
+                # Check conditonials #
+                condPassed = False
+                for cond in self.condGroup[group]:
+                    if self.checkConditional(conditions=cond,group=group,cat=histName):
+                        condPassed = True
+                        break
+                if not condPassed:
+                    continue
+
+                # Get yields from histogram #
+                h = self.content[histName][group]['nominal']
                 if h.__class__.__name__.startswith('TH1'):
                     integral = h.IntegralAndError(1,h.GetNbinsX(),err)
                 elif h.__class__.__name__.startswith('TH2'):
@@ -669,12 +742,12 @@ class Datacard:
     def yieldPrintout(self):
         # Printout of yields before and after operations #
         logging.info('Yield printout : ')
-        yields_after = self.getYields(self.content)
+        yields_after = self.getYields()
         len_groups = max([len(group) for group in self.groups.keys()]+[1])
 
         def printout(group,y_before,y_after):
             diff = abs(y_after[0]-y_before[0])/y_before[0]*100 if y_after[0] != 0 else 0.
-            string = f'{group:{len_groups+3}s} : yield (before operations) = {y_before[0]:10.3f} +/- {y_before[1]:8.3f} -> yield (after) = {y_after[0]:10.3f} +/- {y_after[1]:8.3f} [{diff:5.2f}%]'
+            string = f'{group:{len_groups+3}s} : yield (before operations) = {y_before[0]:12.3f} +/- {y_before[1]:10.3f} -> yield (after) = {y_after[0]:12.3f} +/- {y_after[1]:10.3f} [{diff:+5.2f}%]'
             logging.info(f'    {string}')
             return len(string)
 
@@ -682,7 +755,9 @@ class Datacard:
             logging.info(f'   Category {histName}')
             yields_tot_before = {'mc': [0.,0.],'signal': [0.,0.]}
             yields_tot_after = copy.deepcopy(yields_tot_before)
-            group_to_split = {key:[group for group,groupCfg in self.groups.items() if groupCfg['type']==key] for key in yields_tot_before.keys()}
+            group_to_split = {key:[group for group in self.content[histName].keys() 
+                                        if self.groups[group]['type']==key and len(self.content[histName][group])>0] 
+                                                for key in yields_tot_before.keys()}
             max_length = 0
             for key in yields_tot_before.keys():
                 for group in group_to_split[key]:
@@ -736,6 +811,7 @@ class Datacard:
         return CMSName
 
     def saveDatacard(self):
+        self.checkForMissingNominals()
         if self.outputDir is None:
             raise RuntimeError("Datacard output path is not set")
 
@@ -748,6 +824,8 @@ class Datacard:
                     d = F.mkdir(self.root_subdir,self.root_subdir)
                     d.cd()
                 for group in self.content[histName].keys():
+                    if len(self.content[histName][group]) == 0:
+                        continue # We have checked nominals before, can happen that empty because of conditionals
                     # Loop over systematics first to fix and save #
                     if self.use_syst:
                         for systName in self.content[histName][group].keys():
@@ -819,6 +897,8 @@ class Datacard:
                 writer = Writer(binName)
             # Add processes #
             for group in self.content[histName]:
+                if len(self.content[histName][group]) == 0:
+                    continue # We have checked nominals before, can happen that empty because of conditionals
                 writer.addProcess(binName       = binName,
                                   processName   = group,
                                   rate          = self.content[histName][group]['nominal'].Integral(),
@@ -861,9 +941,20 @@ class Datacard:
                     if isinstance(footer,str):
                         writer.addFooter(footer)
                     elif isinstance(footer,dict):
-                        conditions = {k:v for k,v in footer.items() if k not in ['line','group']}
-                        if self.checkConditional(conditions,'',histName):
-                            writer.addFooter(footer['line'])
+                        if "autoMCStats" in footer.keys():
+                            conditions = {k:v for k,v in footer.items() if k not in ['autoMCStats','group']}
+                            if self.checkConditional(conditions,'',histName):
+                                if isinstance(footer['autoMCStats'],bool) and not footer['autoMCStats']:
+                                    writer.useAutoMCStat = None
+                                elif isinstance(footer['autoMCStats'],list) and not footer['autoMCStats']:
+                                    writer.useAutoMCStat = footer['autoMCStats']
+                                else:   
+                                    raise RuntimeError(f"`autoMCStats` entry type{type(footer['autoMCStats'])} not understood")
+                             
+                        else:
+                            conditions = {k:v for k,v in footer.items() if k not in ['line','group']}
+                            if self.checkConditional(conditions,'',histName):
+                                writer.addFooter(footer['line'])
                     else:   
                         raise RuntimeError(f'Footer type {type(footer)} not understood : {footer}')
                 
@@ -1055,7 +1146,14 @@ class Datacard:
         missings = []
         for histName in self.content.keys():
             for group in self.content[histName]:
-                if 'nominal' not in self.content[histName][group].keys():
+                # Check condition #
+                condPassed = False
+                for cond in self.condGroup[group]:
+                    if self.checkConditional(conditions=cond,group=group,cat=histName):
+                        condPassed = True
+                        break
+                # Check if nominal is there
+                if condPassed and 'nominal' not in self.content[histName][group].keys():
                     missings.append([histName,group])
         if len(missings) != 0 :
             error_message = 'Following histograms are missing :'
@@ -1693,14 +1791,10 @@ class Datacard:
                 with open(path_data,'r') as handle:
                     plotLinearizeData[category] = json.load(handle)
 
-        valid_content = True
         for cat in histConverter.keys():
             for group in self.groups.keys():
                 if len(content[cat][group]) == 0:
-                    logging.error(f"Group {group} in category {cat} is empty")
-                    valid_content = False
-        if not valid_content:
-            raise RuntimeError('Failed to run plotIt')
+                    logging.warning(f"Group {group} in category {cat} is empty")
 
         # Write to files #
         for group in self.groups.keys():
@@ -1748,6 +1842,8 @@ class Datacard:
             histMin[histName] = 0.1
             hstack = ROOT.THStack(histName+"stack",histName+"stack")
             for group in content[histName].keys():
+                if len(content[histName][group]) == 0:
+                    continue
                 if self.groups[group]['type'] == 'mc':
                     hstack.Add(content[histName][group]['nominal'])
                 if self.groups[group]['type'] == 'signal':
@@ -1958,7 +2054,7 @@ class Datacard:
             entries = self.combineConfigs.keys()
 
         # Combine setup #
-        combineModes = ['limits','gof','pulls_impacts','prefit','postfit_b','postfit_s']
+        combineModes = ['significance','limits','gof','pulls_impacts','prefit','postfit_b','postfit_s']
         slurmIdPerEntry = {}
         # Loop over all the entries inside the combine configuration #
         for entry in entries:
@@ -2053,6 +2149,10 @@ class Datacard:
                 # Combine them into bins #
                 binsToUse = []
                 for cat,era in itertools.product(categories,eras):
+                    if not isinstance(cat,list):
+                        cat = [cat]
+                    if not isinstance(era,list):
+                        era = [era]
                     bins = []
                     if len(cat) > 0:
                         bins = [f'{c}_{e}' for c in cat for e in era]
@@ -2222,7 +2322,7 @@ class Datacard:
                                             logging.debug(f'Tree limit in {f} has {tree.GetEntries()} entries instead of {toys}')
                                             valid = False
                                 return valid
-                        elif combineMode == 'pulls_impacts':
+                        if combineMode == 'pulls_impacts':
                             n_jobs = len(systNames) + 1 # 1 = initial fit, >1: all the systematics
                             idxs = [_ for _ in range(1,n_jobs+1)]
                             if 'use_snapshot' in combineCfg.keys() and combineCfg['use_snapshot']:
@@ -2417,6 +2517,24 @@ class Datacard:
                     campaign = str(campaign[0])
                 else:
                     campaign = 'run2'
+
+                # Producing significance file #
+                if combineMode == 'significance':
+                    # Find the root file #
+                    sigFile = None
+                    for rootFile in rootFiles:
+                        if not os.path.basename(rootFile).startswith('workspace'):
+                            sigFile = rootFile
+                    if sigFile is not None:
+                        # Extact significance #
+                        with TFileOpen(sigFile,'r') as F:
+                            tree = F.Get('limit')
+                            for event in tree:
+                                sig = event.limit
+                        path_sig = os.path.join(self.outputDir,subdirBin,'significance.json')
+                        with open(path_sig,'w') as handle:
+                            json.dump(sig,handle,indent=4)
+                        logging.info(f'Saved significance as {path_sig}') 
 
                 # Producing limits #
                 if combineMode == 'limits':
@@ -2745,6 +2863,22 @@ class Datacard:
 
             # Combined finalize mode for all bins (in case there was) #
             if len(subdirBinPaths) > 1 and not self.worker:
+                # Significance : combine into one file #
+                if combineMode == 'significance':
+                    content = {}
+                    for subdirBinPath in subdirBinPaths:
+                        path_json = os.path.join(subdirBinPath,'significance.json')
+                        if not os.path.exists(path_json):
+                            logging.warning(f'Could not load {path_json}, will continue')
+                            continue
+                        logging.info(f'Loading {path_json}')
+                        with open(path_json,'r') as handle:
+                            subCont = json.load(handle)
+                            content[os.path.basename(subdirBinPath)] = subCont
+                    # Save combined content #
+                    with open(os.path.join(subdir,'significance.json'),'w') as handle:
+                        json.dump(content,handle)
+                    logging.info(f"Saved significance summary in {os.path.join(subdir,'significance.json')}")
                 # Limits : combine into one plot #
                 if combineMode == 'limits':
                     # Produce plots #
