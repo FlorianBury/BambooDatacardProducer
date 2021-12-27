@@ -529,7 +529,6 @@ class Datacard:
         return True
                 
     def getHistograms(self,rootfile):
-        #f = ROOT.TFile(rootfile)
         sample = os.path.basename(rootfile)
         # Get config info #
         lumi = self.yaml_dict["luminosity"][str(self.era)]
@@ -548,6 +547,11 @@ class Datacard:
 
         # Open ROOT file #
         with TFileOpen(rootfile,'r') as F:
+            # Check that at least one histogram is there #
+            # (to make computations faster, especially when using split and several dirs)
+            if not any([F.GetListOfKeys().Contains(hName) for hName in self.fileHistList]):
+                # Not a single histogram name has been found in the file, return nothing
+                return {}
             # Get list of hist names #
             list_histnames = []
             for key in F.GetListOfKeys():
@@ -632,10 +636,13 @@ class Datacard:
             self.yamlName = [self.yamlName]
         yamlDict = {}
         for path in self.path:
+            if not os.path.isdir(path):
+                logging.error(f"`{path}` is not a directory")
+                continue
             for yamlName in self.yamlName:
                 yamlPath = os.path.join(path,yamlName)
                 if not os.path.exists(yamlPath):
-                    logging.warning("{} -> not found, skipped".format(yamlPath))
+                    logging.warning(f"`{yamlPath}` -> not found, skipped")
                     continue
                 # Parse YAML #
                 with open(yamlPath,"r") as handle:
