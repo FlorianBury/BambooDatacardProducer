@@ -185,7 +185,7 @@ class Writer:
         # AutoStats #
         if self.useAutoMCStat is not None:
             for binName in self.binNames:
-                card.write(f"{binName}".ljust(spaces)+"autoMCStats "+"_".join(self.useAutoMCStat)+sep)
+                card.write(f"{binName}".ljust(spaces)+"autoMCStats "+" ".join(self.useAutoMCStat)+sep)
 
 
         card.close()
