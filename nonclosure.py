@@ -45,9 +45,10 @@ class NonClosureDY:
 
     def modify(self,h,cat,group,**kwargs):
         assert isinstance(h,ROOT.TH1)
-        if cat not in self.categories:
-            raise RuntimeError(f'Could not find cat `{cat}` in {self.path_json}')
-        coefficients = self.content[cat]['coefficients']
+        key = kwargs['key']
+        if key not in self.categories:
+            raise RuntimeError(f'Could not find key `{key}` in {self.path_json}')
+        coefficients = self.content[key]['coefficients']
         f = self._fit(coefficients)
         for i in range(1,h.GetNbinsX()+1):
             x = h.GetXaxis().GetBinCenter(i)
@@ -56,8 +57,9 @@ class NonClosureDY:
 
     def additional(self,h,cat,group,systName,**kwargs):
         assert isinstance(h,ROOT.TH1)
-        coefficients = self.content[cat]['coefficients']
-        covariance   = np.array(self.content[cat]['covariance'])
+        key = kwargs['key']
+        coefficients = self.content[key]['coefficients']
+        covariance   = np.array(self.content[key]['covariance'])
         assert covariance.shape == (2,2)
         eigenValues , eigenVectors = np.linalg.eigh(covariance)
         h_shape1_up   = h.Clone(f"{h.GetName()}_{systName}_shape1_up")
@@ -127,9 +129,9 @@ class NonClosureFake:
 
     def additional(self,h,cat,group,systName,**kwargs):
         assert isinstance(h,ROOT.TH1)
-        cog   = self.content[cat]['cog']
-        nom   = self.content[cat]['nom']
-        slope = self.content[cat]['slope']
+        cog   = self.content[kwargs['key']]['cog']
+        nom   = self.content[kwargs['key']]['nom']
+        slope = self.content[kwargs['key']]['slope']
         
         h_nom_up     = h.Clone(f"{h.GetName()}_{systName}_nom_up")
         h_nom_down   = h.Clone(f"{h.GetName()}_{systName}_nom_down")

@@ -82,7 +82,7 @@ class Datacard:
         self.histCorrections    = histCorrections
         self.save_datacard      = save_datacard
         self.custom_args        = custom_args
-        self.regroup            = {}
+        self.aggregation            = {}
 
         # Format eras as string #
         if isinstance(self.era,list) or isinstance(era,tuple):
@@ -200,9 +200,10 @@ class Datacard:
         if self.pseudodata:
             self.roundFakeData()
         if self.histCorrections is not None:
-            self.applyCorrectionAfterAggregation()
-        if self.regroup:
-            self.applyRegrouping()
+            self.applyCorrections(False)
+        if self.aggregation:
+            self.applyAggregation()
+            self.applyCorrections(True)
         if self.histEdit is not None:
             self.applyEditing()
         if self.rebin is not None:
@@ -428,7 +429,8 @@ class Datacard:
                                     if add_file not in self.condSample.keys():
                                         self.condSample[add_file] = []
                                     cond = {k:v for k,v in f.items() if k != 'files'}
-                                    self.condGroup[group].append(copy.deepcopy(cond))
+                                    if cond not in self.condGroup[group]:
+                                        self.condGroup[group].append(copy.deepcopy(cond))
                                     cond['group'] = group
                                     if cond not in self.condSample[add_file]:
                                         self.condSample[add_file].append(cond)
@@ -458,29 +460,29 @@ class Datacard:
     def checkforIntermediateAggregation(self):
         for iconf,corrConfig in enumerate(self.histCorrections):
             if 'histConverter' in corrConfig.keys():
-                if 'regroup' not in corrConfig.keys():
-                    raise RuntimeError(f"If you use `histConverter` in nonclosure entry {iconf} of era {self.era}, you need `regroup`")
+                if 'aggregation' not in corrConfig.keys():
+                    raise RuntimeError(f"If you use `histConverter` in nonclosure entry {iconf} of era {self.era}, you need `aggregation`")
                 histConverter = corrConfig['histConverter']
-                regroup = corrConfig['regroup']
-                intermediate = [v for values in regroup.values() for v in values]
+                aggregation = corrConfig['aggregation']
+                intermediate = [v for values in aggregation.values() for v in values]
                 if set(histConverter.keys()).intersection(set(intermediate)) != set(histConverter.keys()):
                     logging.info(f'Nonclosure entry {iconf} of era {self.era}')
                     logging.info('\thistConverter keys of intermediate :')
                     for key in histConverter.keys():
                         logging.info(f'\t... {key}')
-                    logging.info('\tregroup values :')
+                    logging.info('\taggregation values :')
                     for val in intermediate:
                         logging.info(f'\t... {val}')
                     raise RuntimeError(f'Nonclosure entry {iconf} of era {self.era} mismatch')
-                for key in regroup.keys():
+                for key in aggregation.keys():
                     if key in self.histConverter.keys(): # found a key to change
-                        self.regroup[f'{key}_{self.era}'] = [f'{val}_{self.era}' for val in regroup[key]]
+                        self.aggregation[f'{key}_{self.era}'] = [f'{val}_{self.era}' for val in aggregation[key]]
                         logging.info(f'Main category {key} split between :')
                         del self.histConverter[key]
-                        for newCat in regroup[key]:
+                        for newCat in aggregation[key]:
                             self.histConverter[newCat] = histConverter[newCat]
                             logging.info(f'... {newCat}')
-        if self.regroup:
+        if self.aggregation:
             self.initialize()
 
     @staticmethod
@@ -1013,7 +1015,7 @@ class Datacard:
                     hdown.SetBinContent(i, 100 * hnom.GetBinContent(i))
                 if hup.GetBinContent(i)/hnom.GetBinContent(i) > 100:
                     hup.SetBinContent(i, 100 * hnom.GetBinContent(i))
-                # Check if too small, inlate in case #
+                # Check if too small, inflate in case #
                 if hdown.GetBinContent(i)/hnom.GetBinContent(i) < 1./100:
                     hdown.SetBinContent(i, 1./100 * hnom.GetBinContent(i))
                 if hup.GetBinContent(i)/hnom.GetBinContent(i) < 1./100:
@@ -1027,10 +1029,18 @@ class Datacard:
                         hup.SetBinContent(i,0.00001)
                         hdown.SetBinContent(i,0.00001)
 
-    def applyCorrectionAfterAggregation(self):
+    def applyCorrections(self,after_aggregation=True):
         for corrConfig in self.histCorrections:
             if ":" not in corrConfig['module']:
                 raise RuntimeError(f"`:` needs to be in the module arg {corrConfig['module']}")
+            # If regrouping, order of non closure is important #
+            if self.aggregation:
+                if 'aggregation' in corrConfig.keys() and after_aggregation:
+                    continue # Non-closure corrections that require aggregation are already done
+                if not 'aggregation' in corrConfig.keys() and not after_aggregation:
+                    continue # Non-closure corrections that do not require aggregation will be done in next call
+
+            # Get the module and class #
             lib, clsName = corrConfig['module'].split(':')
             lib = os.path.join(os.path.abspath(os.path.dirname(__file__)),lib)
             if not os.path.isfile(lib):
@@ -1039,6 +1049,7 @@ class Datacard:
             mod = spec.loader.load_module()
             cls = getattr(mod, clsName, None)(**corrConfig['init'])
             logging.info(f"Applying {corrConfig['module']}")
+            # Loop over categories #
             for cat in self.content.keys():
                 cat_no_era = cat.replace(f'_{self.era}','')
                 if cat_no_era not in corrConfig['categories'].keys():
@@ -1072,67 +1083,64 @@ class Datacard:
                         logging.info(f'\t\t-> applying corrections with key in file {catCfg["key"]}')
                         for hist in self.content[cat][group].values():
                             cls.modify(hist,cat,group,**catCfg)
-                    N = max([len(key) for key in additional_syst.keys()]) + 5 
-                    # Add the additional syst to the content #
-                    for key,h in additional_syst.items():
-                        intChange = 2*(h.Integral()-self.content[cat][group]['nominal'].Integral())/(h.Integral()+self.content[cat][group]['nominal'].Integral()+1e-9)
-                        logging.info(f'\t\t-> Adding systematic shape {key:{N}s} [{intChange:+8.3f}%]')
-                    self.content[cat][group].update(additional_syst)
+                    if len(additional_syst) > 0:
+                        N = max([len(key) for key in additional_syst.keys()]) + 5 
+                        # Add the additional syst to the content #
+                        for key,h in additional_syst.items():
+                            intChange = 2*(h.Integral()-self.content[cat][group]['nominal'].Integral())/(h.Integral()+self.content[cat][group]['nominal'].Integral()+1e-9)
+                            logging.info(f'\t\t-> Adding systematic shape {key:{N}s} [{intChange:+8.3f}%]')
+                        self.content[cat][group].update(additional_syst)
             logging.info('... done')
 
-    def applyRegrouping(self):
-        logging.info('Applying regrouping of categories')
+    def applyAggregation(self):
+        logging.info('Applying aggregation of categories')
         self.checkForMissingNominals()
 
         # Initialize and checks #
-        regroup_conv = {v:key for key,val in self.regroup.items() for v in val}
-        contentToRegroup = {}
+        aggregation_conv = {v:key for key,val in self.aggregation.items() for v in val}
+        contentToAggregate = {}
         for histName in self.content.keys():
-            if histName in regroup_conv.keys():
-                contentToRegroup[histName] = self.content[histName]
+            if histName in aggregation_conv.keys():
+                contentToAggregate[histName] = self.content[histName]
         # Crop categories to regoup from content #
-        for histName in contentToRegroup.keys():
+        for histName in contentToAggregate.keys():
             del self.content[histName]
-        innerCats = [v for val in self.regroup.values() for v in val]
-        #if len(set(self.content.keys())-set(innerCat)) > 0:
-        #    raise RuntimeError("Regrouping has missing categories : "+','.join([cat for cat in self.content.keys() if cat not in innerCat]))
-        #if len(set(innerCat)-set(self.content.keys())) > 0:
-        #    raise RuntimeError("Regrouping has excess categories : "+','.join([cat for cat in innerCat if cat not in self.content.keys()]))
-        for outCat in self.regroup.keys():
+        innerCats = [v for val in self.aggregation.values() for v in val]
+        for outCat in self.aggregation.keys():
             logging.info(f"New category {outCat} will aggregate :")
-            for inCat in self.regroup[outCat]:
+            for inCat in self.aggregation[outCat]:
                 logging.info(f'... {inCat}')
         # Need to compensate missing systematics in categories to aggregate 
         # Eg if someone wants to merge electron and muon channels, there will 
         # be different systematics and we must use the nominal hist when one is missing
         list_syst = {}
         for group in self.groups.keys():
-            for outCat in self.regroup.keys():
-                inCats = self.regroup[outCat]
-                list_syst = list(set([systName for cat in inCats for systName in contentToRegroup[cat][group].keys()]))
+            for outCat in self.aggregation.keys():
+                inCats = self.aggregation[outCat]
+                list_syst = list(set([systName for cat in inCats for systName in contentToAggregate[cat][group].keys()]))
                 for cat in inCats:
                     for systName in list_syst:
-                        if systName != 'nominal' and systName not in contentToRegroup[cat][group].keys():
-                            contentToRegroup[cat][group][systName] = copy.deepcopy(contentToRegroup[cat][group]['nominal'])
-                            contentToRegroup[cat][group][systName].SetName(contentToRegroup[cat][group][systName].GetName()+f'_{systName}')
+                        if systName != 'nominal' and systName not in contentToAggregate[cat][group].keys():
+                            contentToAggregate[cat][group][systName] = copy.deepcopy(contentToAggregate[cat][group]['nominal'])
+                            contentToAggregate[cat][group][systName].SetName(contentToAggregate[cat][group][systName].GetName()+f'_{systName}')
     
         # Aggregate and save as new content #
-        for cat in contentToRegroup.keys():
-            recat = regroup_conv[cat] 
+        for cat in contentToAggregate.keys():
+            recat = aggregation_conv[cat] 
             if recat not in self.content.keys():
                 self.content[recat] = {}
-            for group in contentToRegroup[cat].keys():
+            for group in contentToAggregate[cat].keys():
                 if group not in self.content[recat].keys():
                     self.content[recat][group] = {}
-                for systName,h in contentToRegroup[cat][group].items():
+                for systName,h in contentToAggregate[cat][group].items():
                     if systName not in self.content[recat][group].keys():
-                        self.content[recat][group][systName] = copy.deepcopy(contentToRegroup[cat][group][systName])
+                        self.content[recat][group][systName] = copy.deepcopy(contentToAggregate[cat][group][systName])
                     else:
-                        self.content[recat][group][systName].Add(contentToRegroup[cat][group][systName])
+                        self.content[recat][group][systName].Add(contentToAggregate[cat][group][systName])
 
         # Aggregate the yields #
-        for outCat in self.regroup.keys():
-            inCats = self.regroup[outCat]
+        for outCat in self.aggregation.keys():
+            inCats = self.aggregation[outCat]
             self.yields[outCat] = {}
             for cat in inCats:
                 for group in self.yields[cat].keys():
@@ -1145,8 +1153,21 @@ class Datacard:
                 self.yields[outCat][group][1] = math.sqrt(self.yields[outCat][group][1])
                 # yield error added quadratically
 
+        # Change back the histConverter #
+        for iconf,corrConfig in enumerate(self.histCorrections):
+            if 'aggregation' in corrConfig.keys():
+                aggregation = corrConfig['aggregation']
+                for newCat, oldCats in aggregation.items():
+                    if all([oldCat in self.histConverter.keys() for oldCat in oldCats]):
+                        # Aggregate #
+                        self.histConverter[newCat] = [value for oldCat in oldCats for value in self.histConverter[oldCat]]
+                        # Delete old inner categories #
+                        for oldCat in oldCats:
+                            del self.histConverter[oldCat]
+                    
+
         # Clear for garbage collector #
-        del contentToRegroup
+        del contentToAggregate
 
     def checkForMissingNominals(self):
         # Check at least one nominal per group #
@@ -1721,14 +1742,6 @@ class Datacard:
         # Prepare root files #
         logging.info("Preparing plotIt root files for categories")
         histConverter = {f'{key}_{self.era}': val for key,val in self.histConverter.items()}
-
-        # Undo the regroup #
-        if self.regroup:
-            for outCat in self.regroup.keys():
-                inCats = self.regroup[outCat]
-                histConverter[outCat] = [name for cat in inCats for name in histConverter[cat]]
-                for cat in inCats:
-                    del histConverter[cat]
 
         categories = list(histConverter.keys())
         for cat in histConverter.keys():
