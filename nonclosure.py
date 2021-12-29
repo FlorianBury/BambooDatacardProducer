@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import functools
 import numpy as np
 import ROOT
 
@@ -167,17 +168,19 @@ class UnderlyingEvent:
         with open(self.path_json,'r') as handle:
             self.content = json.load(handle)
 
-    @property
+    @functools.cached_property
     def group(self):
-        return None 
-        # Either use the file, or put a nominal shape
-
+        groups = []
+        for cat in self.content.keys():
+            for group in self.content[cat].keys():
+                if group not in groups:
+                    groups.append(group)
+        return groups
 
     def additional(self,h,cat,group,systName,**kwargs):
-        h_up = h.Clone(f"{h.GetName()}_{systName}_up")
-        h_down = h.Clone(f"{h.GetName()}_{systName}_down")
-
         if group in self.content[cat].keys():
+            h_up = h.Clone(f"{h.GetName()}_{systName}_up")
+            h_down = h.Clone(f"{h.GetName()}_{systName}_down")
             if isinstance(h,ROOT.TH1):
                 for i in range(1,h.GetNbinsX()+1):
                     x = h.GetXaxis().GetBinCenter(i)
@@ -188,8 +191,10 @@ class UnderlyingEvent:
                             h_down.SetBinContent(i,y*binCfg['down'])
                             break
             else:
-                raise ValueError(f'Histogram type {h.__class__.__name__} from systematic {systName} not inderstood')
+                raise ValueError(f'Histogram type {h.__class__.__name__} from systematic {systName} not understood')
 
-        return {f'{systName}Up'    : h_up,
-                f'{systName}Down'  : h_down}
+            return {f'{systName}Up'    : h_up,
+                    f'{systName}Down'  : h_down}
+        else:
+            return {}
 
