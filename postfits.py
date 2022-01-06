@@ -163,7 +163,7 @@ class PostfitPlots:
             raise RuntimeError(f'`eras` entry type {type(self._eras)} not understood')
 
         # Get correct lumi format #
-        lumis = {'2016':36.330,'2017':41.530,'2018':59.740}
+        lumis = {'2016':36.330,'2017':41.530,'2018':59.740,'HL':3000.}
         lumi = 0.
         for era in self._eras:
             if era not in lumis.keys():
@@ -219,7 +219,6 @@ class PostfitPlots:
         # Process histograms per group #
         logging.debug('Processing histograms')
         self._histograms['__combined__'] = {}
-        embed()
         for group,optCfg in self._options.items():
             list_hist = [self._histograms[cat][group] for cat in categories]
             if group == 'data':
