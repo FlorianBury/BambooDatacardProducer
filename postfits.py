@@ -220,7 +220,9 @@ class PostfitPlots:
         logging.debug('Processing histograms')
         self._histograms['__combined__'] = {}
         for group,optCfg in self._options.items():
-            list_hist = [self._histograms[cat][group] for cat in categories]
+            list_hist = [self._histograms[cat][group] for cat in categories if group in self._histograms[cat].keys()]
+            if len(list_hist) == 0:
+                continue
             if group == 'data':
                 # Get combined data #
                 self._histograms['__combined__']['data'] = self._processDataGraphs(list_hist)
