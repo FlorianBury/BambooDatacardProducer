@@ -268,7 +268,8 @@ class PostfitPlots:
         logging.debug('... done')
                 
         # Add to legend #
-        legend.AddEntry(self._histograms['__combined__']['data'],"Data","p")
+        if self._unblind:
+            legend.AddEntry(self._histograms['__combined__']['data'],"Data","p")
         for group in self._order:
             # Get options #
             optCfg = self._options[group]
@@ -370,7 +371,7 @@ class PostfitPlots:
             if not h.GetSumw2N():
                 h.Sumw2()
 
-            # In case group no there yet, copy it (to avoid disappearance after file closed #
+            # In case group no there yet, copy it (to avoid disappearance after file closed) #
             if processCfg['group'] not in self._histograms[cat].keys():
                 self._histograms[cat][processCfg['group']] = copy.deepcopy(h)
             # Group already there, add it #
