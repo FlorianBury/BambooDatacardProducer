@@ -4,7 +4,8 @@ import copy
 import math
 import ROOT
 import logging
-import array
+import numpy as np
+import ctypes
 from IPython import embed
 
 from context import TFileOpen
@@ -13,7 +14,7 @@ ROOT.gROOT.SetBatch(True)
 ROOT.gStyle.SetOptStat(0)
 
 class PostfitPlots:
-    def __init__(self,bin_name,output_path,fit_diagnostics_path,processes,fit_type,header,analysis,eras,categories,labels=None,label_positions=None,plot_options={},unblind=False,show_ratio=False,sort_by_yield=True,verbose=False):
+    def __init__(self,bin_name,output_path,fit_diagnostics_path,processes,fit_type,header,analysis,eras,categories,bin_edges=None,labels=None,label_positions=None,plot_options={},unblind=False,show_ratio=False,sort_by_yield=True,verbose=False):
         """
             Class that performs the postfit plots
 
@@ -27,6 +28,7 @@ class PostfitPlots:
             - analysis [str]                : name of the analysis (eg, HH, ttH, ...) to be printed for the case of postfit shapes as "#mu(HH) = "
             - eras [str/list(str)]          : eras to be looked into (can be a single one, or list of eras to be aggregated), lumi is taken from there, /!\ Only 2016, 2017 and 2018 coded so far
             - categories [list(str)]        : names of the categories (= combine bins) to be taken from the fitdiag file (without the era in the name)
+            - bin_edges [list(list/float)]  : list of bin edges to rebin the histogram from combine (if multiple categories, need to provide one set of bin edges per category)
             - labels [list(str)]            : list of categories labels to be put on top of each category (if several) [OPTIONAL]
             - label_positions [list(float)] : x positions of the labels [OPTIONAL], if not provided and labels is, will find some "smart" positions
             - plot_options [dict]           : plotting options to override default [see below]
@@ -68,6 +70,7 @@ class PostfitPlots:
                            'labelsize': <labelsize>,
                            'offset': <offset>,
                            'label': <x-axis label>,
+                           'divisions': <number of divisions>
                            'min': <min x-axis>,
                            'max': <max x-axis>,
                 },
@@ -76,6 +79,7 @@ class PostfitPlots:
                            'labelsize': <labelsize>,
                            'offset': <offset>,
                            'label': <y-axis label>,
+                           'divisions': <number of divisions>
                            'min': <min y-axis>,
                            'max': <max y-axis>
                 },
@@ -104,6 +108,7 @@ class PostfitPlots:
         self._analysis              = analysis
         self._eras                  = eras
         self._categories            = categories
+        self._bin_edges             = bin_edges
         self._labels                = labels
         self._label_positions       = label_positions
         self._plot_options          = plot_options
@@ -176,13 +181,16 @@ class PostfitPlots:
             lumi = str(round(lumi,1))
         lumi += ' fb^{-1} (13 TeV)'
 
+        # Bin edges #
+        if self._bin_edges is not None:
+            if not isinstance(self._bin_edges[0],list):
+                self._bin_edges = [self._bin_edges]
 
         # Open root file and get folder subdir # 
         if not os.path.exists(self._fit_diagnostics_path):
             raise RuntimeError(f'`{self._fit_diagnostics_path}` does not exist')
 
         self._histograms = {}
-        self._binning = {} 
         logging.info(f'Opening file {self._fit_diagnostics_path}')
         with TFileOpen(self._fit_diagnostics_path,'r') as F:
             logging.debug(f'Opened {self._fit_diagnostics_path}')
@@ -296,6 +304,7 @@ class PostfitPlots:
 
         # Make template #
         template = self._getTemplate()
+        self._changeLabels(template)
         template.Draw('')
         # Draw stack #
         stack_MC.Draw('hist same')
@@ -337,6 +346,7 @@ class PostfitPlots:
             bottomPad.cd()
             # Get ratios #
             err_hist = self._getTotalHistError(self._histograms['__combined__']['total'])
+            self._changeLabels(err_hist)
             err_hist.Draw('e2 hist')
             if self._unblind:
                 err_data = self._getDataError(self._histograms['__combined__']['total'],
@@ -384,14 +394,6 @@ class PostfitPlots:
                 self._histograms[cat][processCfg['group']].Add(h)
         # Add data #
         data = self._getNonZeroGraph(copy.deepcopy(folder.Get('data')))
-        # Get binning from data graph #
-        xs = list(data.GetX())
-        bins = [xs[0]-data.GetErrorXlow(0)]
-        for i in range(data.GetN()):
-            bins.append(xs[i]+data.GetErrorXhigh(i))
-            if i > 0:
-                assert xs[i-1]+data.GetErrorXhigh(i) == xs[i]-data.GetErrorXlow(i)
-        self._binning[cat] = bins
 
         # Need to square the errors so we can add them if needed, and use the sqrt later 
         for i in range(data.GetN()):
@@ -467,52 +469,70 @@ class PostfitPlots:
 
     def _processDataGraphs(self,list_data):
         # Concatenate several tgraphs into one #
+        if self._bin_edges is not None:
+            if len(self._bin_edges) != len(list_data):
+                raise RuntimeError(f'There are {len(list_hist)} histograms but only {len(self._bin_edges)} bin edges sets have been provided')
+            widths = np.concatenate([np.diff(bin_edges) for bin_edges in self._bin_edges],axis=0)
+            edges = np.concatenate([np.array([0]),np.cumsum(widths)],axis=0)
+            xvals = (edges[1:]+edges[:-1])/2
+            xerror_low = xvals-edges[:-1]
+            xerror_high = edges[1:]-xvals
+        else:
+            xvals = [np.array(g.GetX()) for g in list_data]
+            for i in range(1,len(xvals)):
+                xvals[i] += xvals[i-1][-1]
+            xvals = np.concatenate(xvals,axis=0)
+            xerror_low  = [g.GetErrorXlow(i) for g in list_data for i in range(0,g.GetN())]
+            xerror_high = [g.GetErrorXhigh(i) for g in list_data for i in range(0,g.GetN())]
         Ns = [g.GetN() for g in list_data]
-        xvals = [list(g.GetX()) for g in list_data]
-        yvals = [list(g.GetY()) for g in list_data]
+        yvals = np.concatenate([np.array(g.GetY()) for g in list_data],axis=0)
+        yerror_low  = [g.GetErrorYlow(i) for g in list_data for i in range(0,g.GetN())]
+        yerror_high = [g.GetErrorYhigh(i) for g in list_data for i in range(0,g.GetN())]
         gtot = ROOT.TGraphAsymmErrors(sum(Ns))
-        i = 0
-        for xs,ys,g in zip(xvals,yvals,list_data):
-            j = 0
-            for x,y in zip(xs,ys):
-                gtot.SetPoint(i,i,y)
-                gtot.SetPointError(i,
-                       g.GetErrorXlow(j),
-                       g.GetErrorXhigh(j),
-                       g.GetErrorYlow(j),
-                       g.GetErrorYhigh(j))
-                j += 1
-                i += 1
+        for i in range(0,sum(Ns)):
+            gtot.SetPoint(i,xvals[i],yvals[i])
+            gtot.SetPointError(i,
+                               xerror_low[i],
+                               xerror_high[i],
+                               yerror_low[i],
+                               yerror_high[i])
         # Return #
         return gtot
         
     def _processBackgroundHistograms(self,list_hist):
         # Concatenate several hists into one #
-        Ns = [h.GetNbinsX() for h in list_hist]
+        if self._bin_edges is not None:
+            if len(self._bin_edges) != len(list_hist):
+                raise RuntimeError(f'There are {len(list_hist)} histograms but only {len(self._bin_edges)} bin edges sets have been provided')
+            Ns = [len(be)-1 for be in self._bin_edges]
+            widths = np.concatenate([np.diff(bin_edges) for bin_edges in self._bin_edges],axis=0)
+            edges = np.concatenate([np.array([0]),np.cumsum(widths)],axis=0)
+        else:
+            Ns = [h.GetNbinsX() for h in list_hist]
+            edges = np.arange(sum(Ns)+1,dtype=np.float32)
         htot = getattr(ROOT,list_hist[0].__class__.__name__)(
                     list_hist[0].GetName()+'tot',
                     list_hist[0].GetTitle()+'tot',
-                    sum(Ns),
-                    0.,
-                    sum(Ns))
-        indices = [list(range(1,h.GetNbinsX()+1)) for h in list_hist]
-        j = 1
-        for ind,h in zip(indices,list_hist):
-            for i in ind:
-                htot.SetBinContent(j,h.GetBinContent(i))
-                htot.SetBinError(j,h.GetBinError(i))
-                j += 1
+                    edges.shape[0]-1,
+                    edges)
+        i = 1
+        for h,N in zip(list_hist,Ns):
+            for j in range(1,N+1):
+                htot.SetBinContent(i,h.GetBinContent(j))
+                htot.SetBinError(i,h.GetBinError(j))
+                i += 1
         # Return #
         return htot
         
     def _getTotalHistError(self,total_hist):
         # Declare hist #
+        edges = np.array([total_hist.GetXaxis().GetBinLowEdge(i) 
+                    for i in range(1,total_hist.GetNbinsX()+2)], dtype=np.float32)
         total_err = getattr(ROOT,total_hist.__class__.__name__)(
                     total_hist.GetName()+'err',
                     '',
-                    total_hist.GetNbinsX(),
-                    total_hist.GetXaxis().GetBinLowEdge(1),
-                    total_hist.GetXaxis().GetBinUpEdge(total_hist.GetNbinsX()))
+                    edges.shape[0]-1,
+                    edges)
         # Esthetics #
         total_err.GetYaxis().SetTitle("#frac{Data - Expectation}{Expectation}")
         total_err.GetXaxis().SetTitleOffset(1.25)
@@ -543,11 +563,18 @@ class PostfitPlots:
         # Custom #
         minr = - maxabsr * 1.2
         maxr = + maxabsr * 1.2
-        if 'ratio' in self._plot_options.keys():
-            opt = self._plot_options['ratio']
-            self._applyCustomAxisOptions(total_err.GetYaxis(),opt,minr,maxr)
+        optx = {}
+        opty = {}
         if 'x-axis' in self._plot_options.keys():
-            self._applyCustomAxisOptions(total_err.GetXaxis(),self._plot_options['x-axis'])
+            optx.update(self._plot_options['x-axis'])
+        if 'y-axis' in self._plot_options.keys():
+            opty.update(self._plot_options['y-axis'])
+            if 'label' in opty:
+                del opty['label']
+        if 'ratio' in self._plot_options.keys():
+            opty.update(self._plot_options['ratio'])
+        self._applyCustomAxisOptions(total_err.GetXaxis(),optx)
+        self._applyCustomAxisOptions(total_err.GetYaxis(),opty,minr,maxr)
 
         # Return #
         return total_err
@@ -590,17 +617,15 @@ class PostfitPlots:
 
     def _getTemplate(self):
         # Set bin content #
-        bins = list(self._binning.values())
-        template_bins = bins[0][:]
-        for i in range(1,len(bins)):
-            template_bins += [b+template_bins[-1] for b in bins[i]]
-        template = ROOT.TH1F('template','',len(template_bins)-1,array.array('d',template_bins))
+        h_tot = self._histograms['__combined__']['total']
+        bins = np.array([h_tot.GetXaxis().GetBinLowEdge(i) for i in range(1,h_tot.GetNbinsX()+2)],dtype=np.float32)
+        template = ROOT.TH1F('template','',bins.shape[0]-1,bins)
         # Esthetics #
         xaxis = template.GetXaxis()
         yaxis = template.GetYaxis()
 
         # Custom #
-        maxy = self._histograms['__combined__']['total'].GetMaximum()
+        maxy = h_tot.GetMaximum()
         if 'logy' in self._plot_options.keys() and self._plot_options['logy']:
             # If log, need to adapt min and max
             miny = 1e-2 
@@ -608,11 +633,11 @@ class PostfitPlots:
         else:
             miny = 0.
             maxy *= 2.0
-        xaxis_opt = self._plot_options['x-axis'] if 'x-axis' in self._plot_options.keys() else {}
-        yaxis_opt = self._plot_options['y-axis'] if 'y-axis' in self._plot_options.keys() else {}
+        optx = self._plot_options['x-axis'] if 'x-axis' in self._plot_options.keys() else {}
+        opty = self._plot_options['y-axis'] if 'y-axis' in self._plot_options.keys() else {}
 
-        self._applyCustomAxisOptions(xaxis,xaxis_opt)
-        self._applyCustomAxisOptions(yaxis,yaxis_opt,miny,maxy)
+        self._applyCustomAxisOptions(xaxis,optx)
+        self._applyCustomAxisOptions(yaxis,opty,miny,maxy)
 
         # Need to kill bottom part of showing ratio #
         if self._show_ratio:
@@ -621,11 +646,69 @@ class PostfitPlots:
 
         return template
 
+    def _changeLabels(self,h):
+        if self._bin_edges is not None:
+            # Get current labels #
+            labels = self._getLabels(h)
+            # Get current bin edges #
+            edges = np.array([h.GetXaxis().GetBinLowEdge(i) for i in range(1,h.GetNbinsX()+2)])
+            # Make new list of labels per bin #
+            new_labels = []
+            for idx,cat_edges in enumerate(self._bin_edges):
+                if idx < len(self._bin_edges) - 1:
+                    new_labels.extend(cat_edges[:-1])    
+                else:
+                    new_labels.extend(cat_edges)    
+            
+            # Change labels # 
+            for i,label in enumerate(labels):
+                # Find bin edge -> get the new label
+                idx = np.argmin(np.abs(edges-label))
+                new_label = new_labels[idx]
+                if new_label==int(new_label): # format as an int if no decimal
+                    new_label = int(new_label)
+                h.GetXaxis().ChangeLabel(i+1,-1,-1,-1,-1,-1,str(new_label))
+                
+
+    @staticmethod
+    def _getLabels(h):
+        # No way to get labels when they are numeric values
+        # Need to redo the method in root that optimizes it
+        # See : https://root-forum.cern.ch/t/changing-only-the-displayed-labels/40584
+        x1 = h.GetXaxis().GetBinLowEdge(1)
+        x2 = h.GetXaxis().GetBinUpEdge(h.GetNbinsX())
+        div = h.GetXaxis().GetNdivisions()
+        if div > 0:
+            ndiv = div%100
+        else:
+            raise ValueError('Not supported : GetNdivisions() = {div}')
+        ndivo = ctypes.c_int(0)
+        x1o = ctypes.c_double(0.)
+        x2o = ctypes.c_double(0.)
+        bw  = ctypes.c_double(0.)
+        ROOT.THLimitsFinder.Optimize(x1,x2,ndiv,x1o,x2o,ndivo,bw,"")
+    
+        labels = [x1o.value]
+        for i in range(ndivo.value):
+            labels.append(labels[-1]+bw.value)
+    
+        return labels
+    
+
     def _getSeparations(self):
         # If single category, no need for separation #
-        if len(self._binning) == 1:
+        if len(self._categories) == 1:
             return [],[]
-        bins = list(self._binning.values())
+        if self._bin_edges is not None:
+            # Binning is taken from provided bin edges 
+            bins = [[be-bin_edges[0] for be in bin_edges] for bin_edges in self._bin_edges] 
+        else:
+            # Need to extract binning from self._histograms
+            bins = []
+            for cat in self._categories:
+                # Take first histogram of category
+                h = self._histograms[cat][list(self._histograms[cat].keys())[0]]
+                bins.append([h.GetXaxis().GetBinLowEdge(i) for i in range(1,h.GetNbinsX()+2)])
         # Multiples categories, need to find their x position #
         lines_xpos = [0.]
         for i in range(len(bins)):
@@ -700,6 +783,8 @@ class PostfitPlots:
             axis.SetLabelSize(axis_opt['labelsize'])
         if 'labelfont' in axis_opt.keys():
             axis.SetLabelFont(axis_opt['labelfont'])
+        if 'divisions' in axis_opt.keys():
+            axis.SetNdivisions(axis_opt['divisions'])
         # Overriding min and max #
         if 'min' in axis_opt.keys():
             axis_min = axis_opt['min']
@@ -725,6 +810,13 @@ class PostfitPlots:
             # Add to stack if background #
             if optCfg['type'] == 'mc' and group != 'total':
                 stack_MC.Add(self._histograms['__combined__'][group])
+
+        optx = self._plot_options['x-axis'] if 'x-axis' in self._plot_options.keys() else {}
+        opty = self._plot_options['y-axis'] if 'y-axis' in self._plot_options.keys() else {}
+
+        self._applyCustomAxisOptions(stack_MC.GetStack().First().GetXaxis(),optx)
+        self._applyCustomAxisOptions(stack_MC.GetStack().First().GetYaxis(),opty)
+
         return stack_MC
 
     def _getLegend(self):

@@ -2824,8 +2824,8 @@ class Datacard:
                         processes = processes[self.era[0]]
                     else:
                         processes = getProcesses(self.groups)
-
-                    eras = [self.era] + [era for era in self.era]
+                
+                        
                     for plotCfg in combineCfg['plots']:
                         for era in eras:
                             plotCfg.update({'fit_diagnostics_path'  : fitdiagFile,
@@ -2833,6 +2833,33 @@ class Datacard:
                                             'processes'             : processes,
                                             'eras'                  : era,
                                             'fit_type'              : combineMode})
+                            # Bin width #
+                            if 'keep_bin_width' in plotCfg.keys():
+                                if plotCfg['keep_bin_width']:
+                                    # Need to open datacard root files to get the binning #
+                                    bin_edges = {}
+                                    if isinstance(era,str):
+                                        era = copy.deepcopy([era])
+                                    if isinstance(era,list):
+                                        era = copy.deepcopy(era)
+                                    for e in era:
+                                        bin_edges[e] = {}
+                                        for cat in plotCfg['categories']:
+                                            with TFileOpen(os.path.join(self.outputDir,f'{cat}_{e}.root'),'r') as F:
+                                                hName = list(F.GetListOfKeys())[0].GetName() # Take the first histogram
+                                                h = F.Get(hName)
+                                                bin_edges[e][cat] = [round(h.GetXaxis().GetBinLowEdge(i),6) for i in range(1,h.GetNbinsX()+2)]
+                                    # Take the first era bin edges #
+                                    plotCfg['bin_edges'] = list(bin_edges[era[0]].values())
+                                    if len(era) > 1:
+                                        # Still check that bin edges are the same #
+                                        for cat in categories:
+                                            bin_eras = [bin_edges[e][cat] for e in era]
+                                            if not all ([bin_eras[0] == subbin for subbin in bin_eras[1:]]):
+                                                logging.warning(f'In category {cat}, bin edges vary -> this might produce weird plots')
+                                                for e,bin_era in zip(era,bin_eras):
+                                                    logging.warning(f'... {era} -> bin edges = {bin_era}')
+                                del plotCfg['keep_bin_width']
                             PostfitPlots(**plotCfg)
 
 
