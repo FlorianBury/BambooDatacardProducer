@@ -2864,7 +2864,7 @@ class Datacard:
 
 
                     # Nuisances likelihoods #
-                    if 'postfit' in combineMode:
+                    if 'postfit' in combineMode and ('nuisance_likelihood_scan' not in combineCfg.keys() or combineCfg['nuisance_likelihood_scan']):
                         fit_name = None
                         if combineMode == 'postfit_b':
                             fit_name = 'fit_b'
