@@ -134,6 +134,7 @@ class PostfitPlots:
             self._header_legend = f'{header}, #mu({self._analysis})=#hat{{#mu}}'
         elif self._fit_type == 'postfit_s':
             folderName = 'shapes_fit_s'
+            self._header_legend = f'{header}, #mu({self._analysis})=#hat{{#mu}}'
         else:
             raise RuntimeError(f'Unknown fit_type {self._fit_type}')
 
