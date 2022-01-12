@@ -14,7 +14,7 @@ ROOT.gROOT.SetBatch(True)
 ROOT.gStyle.SetOptStat(0)
 
 class PostfitPlots:
-    def __init__(self,bin_name,output_path,fit_diagnostics_path,processes,fit_type,header,analysis,eras,categories,bin_edges=None,labels=None,label_positions=None,plot_options={},unblind=False,show_ratio=False,sort_by_yield=True,verbose=False):
+    def __init__(self,bin_name,output_path,fit_diagnostics_path,processes,fit_type,header,analysis,eras,categories,bin_edges=None,labels=None,label_positions=None,plot_options={},unblind=False,show_ratio=False,sort_by_yield=True,energy='13 TeV',verbose=False):
         """
             Class that performs the postfit plots
 
@@ -180,7 +180,7 @@ class PostfitPlots:
             lumi = str(round(lumi))
         else:
             lumi = str(round(lumi,1))
-        lumi += ' fb^{-1} (13 TeV)'
+        lumi += ' fb^{-1} '+f'({energy})'
 
         # Bin edges #
         if self._bin_edges is not None:
