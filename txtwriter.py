@@ -167,7 +167,7 @@ class Writer:
             + "".join([str(process.index).ljust(spaces) for processes in self.processes.values() for process in processes.values()]) \
             + sep)
         card.write("rate".ljust(spaces) \
-            + "".join(["{:{}.8f}".format(process.rate,spaces).ljust(spaces) for processes in self.processes.values() for process in processes.values()]) \
+            + "".join(["{:.8f}".format(process.rate).ljust(spaces) for processes in self.processes.values() for process in processes.values()]) \
             + sep)
         card.write(f"{dashes}{sep}")
 
