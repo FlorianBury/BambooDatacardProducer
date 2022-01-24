@@ -629,6 +629,9 @@ class Datacard:
         # Normalize hist to data #
         if lumi is not None and xsec is not None and br is not None and sumweight is not None:
             h.Scale(lumi*xsec*br/sumweight)
+        # Cutout under/over-flow bins #
+        h.SetBinContent(0,0.)
+        h.SetBinContent(h.GetNbinsX()+1,0.)
         return h
              
     def loadYaml(self):
@@ -1702,7 +1705,7 @@ class Datacard:
             if cat in missingCats: 
                 continue
             path_yield = os.path.join(yieldDir,f'yields_{cat}.txt')
-            yield_cmd = f"cd {SETUP_DIR}; env -i bash -c 'source {SETUP_SCRIPT} && {ULIMIT} && yield_table.py {txtPath} > {path_yield}'"
+            yield_cmd = f"cd {SETUP_DIR}; env -i bash -c 'source {SETUP_SCRIPT} && {ULIMIT} && yield_table.py {txtPath} --precision 5 > {path_yield}'"
             logging.info(f'... {cat}')
             rc,output = self.run_command(yield_cmd,shell=True, return_output=True)
             if rc != 0: 
