@@ -657,7 +657,12 @@ class Datacard:
                 if 'luminosity' not in yamlDict.keys():
                     yamlDict['luminosity'] = lumi_dict
                 else:
-                    yamlDict['luminosity'].update(lumi_dict)
+                    for key,val in lumi_dict.items():
+                        if key not in yamlDict['luminosity'].keys():
+                            yamlDict['luminosity'][key] = val
+                        else:
+                            if yamlDict['luminosity'][key] != lumi_dict[key]:
+                                logging.warning(f'Found different luminosity values for key {key} : {yamlDict["luminosity"][key]} != {lumi_dict[key]} ... this is suspicious') 
 
                 # Get data per sample #
                 info_to_keep = ['cross-section','generated-events','group','type','era','branching-ratio']
@@ -667,9 +672,13 @@ class Datacard:
                         sample_dict[sample] = {k:data[k] for k in data.keys() & info_to_keep}
                     yamlDict['samples'] = sample_dict
                 else:
-                    for sample,data in full_dict['files'].items():
+                    for sample,sampleCfg in full_dict['files'].items():
                         if sample not in yamlDict['samples'].keys():
-                            yamlDict['samples'].update({sample:data})
+                            yamlDict['samples'].update({sample:sampleCfg})
+                        else:
+                            for key in ['cross-section','generated-events','branching-ratio']:
+                                if key in sampleCfg and sampleCfg[key] != yamlDict['samples'][sample][key]:
+                                    logging.warning(f'Found different value in sample {sample} for entry {key} : {sampleCfg[key]} != yamlDict["samples"][sample][key] ... this is suspicious')
                     
                 # Few checks #
                 for sample in yamlDict['samples'].keys():
@@ -2863,6 +2872,8 @@ class Datacard:
                                                 for e,bin_era in zip(era,bin_eras):
                                                     logging.warning(f'... {era} -> bin edges = {bin_era}')
                                 del plotCfg['keep_bin_width']
+                            if logging.root.level <= 10:
+                                plotCfg['verbose'] = True
                             PostfitPlots(**plotCfg)
 
 
