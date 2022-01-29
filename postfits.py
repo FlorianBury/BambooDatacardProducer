@@ -369,7 +369,9 @@ class PostfitPlots:
     def _getProcesses(self,folder,cat):
         for process,processCfg in self._processes.items():
             if not folder.GetListOfKeys().FindObject(process):
-                logging.debug(f'Process `{process}` not found in folder `{folder.GetTitle()}`')
+                logging.warning(f'Process `{process}` not found in folder `{folder.GetTitle()}`')
+                if processCfg['group'] not in self._histograms[cat].keys():
+                    self._histograms[cat][processCfg['group']] = None
                 continue
             if process == 'data':
                 continue # Done in the end 
@@ -519,8 +521,12 @@ class PostfitPlots:
         i = 1
         for h,N in zip(list_hist,Ns):
             for j in range(1,N+1):
-                htot.SetBinContent(i,h.GetBinContent(j))
-                htot.SetBinError(i,h.GetBinError(j))
+                if h is None:
+                    htot.SetBinContent(i,0.)
+                    htot.SetBinError(i,0.)
+                else:
+                    htot.SetBinContent(i,h.GetBinContent(j))
+                    htot.SetBinError(i,h.GetBinError(j))
                 i += 1
         # Return #
         return htot
