@@ -677,9 +677,11 @@ class Datacard:
                             yamlDict['samples'].update({sample:sampleCfg})
                         else:
                             for key in ['cross-section','generated-events','branching-ratio']:
-                                if key in sampleCfg and sampleCfg[key] != yamlDict['samples'][sample][key]:
-                                    logging.warning(f'Found different value in sample {sample} for entry {key} : {sampleCfg[key]} != yamlDict["samples"][sample][key] ... this is suspicious')
-                    
+                                if key in sampleCfg:
+                                    diff = 2*abs(sampleCfg[key]-yamlDict['samples'][sample][key])/(sampleCfg[key]+yamlDict['samples'][sample][key])
+                                    if diff > 1e-6:
+                                        logging.warning(f'Found different value in sample `{sample}` for entry `{key}` : {sampleCfg[key]} != {yamlDict["samples"][sample][key]} [{diff*100:8.5f}%] ... this is suspicious')
+                        
                 # Few checks #
                 for sample in yamlDict['samples'].keys():
                     for key in ['cross-section','generated-events']:
