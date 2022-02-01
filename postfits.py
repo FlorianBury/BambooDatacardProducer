@@ -248,6 +248,8 @@ class PostfitPlots:
                 combined_hist = self._processBackgroundHistograms(list_hist)
                 if combined_hist is not None:
                     self._histograms['__combined__'][group]  = combined_hist
+                else:
+                    continue
                 # Esthetics #
                 color = optCfg['color']
                 if isinstance(color,str) and color.startswith('#'):
