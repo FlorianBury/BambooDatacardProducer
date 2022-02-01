@@ -245,7 +245,9 @@ class PostfitPlots:
                 self._histograms['__combined__']['data'].SetLineStyle(1)
             elif optCfg['type'] in ['mc','signal']:
                 # Get combined hist #
-                self._histograms['__combined__'][group]  = self._processBackgroundHistograms(list_hist)
+                combined_hist = self._processBackgroundHistograms(list_hist)
+                if combined_hist is not None:
+                    self._histograms['__combined__'][group]  = combined_hist
                 # Esthetics #
                 color = optCfg['color']
                 if isinstance(color,str) and color.startswith('#'):
@@ -513,11 +515,19 @@ class PostfitPlots:
         else:
             Ns = [h.GetNbinsX() for h in list_hist]
             edges = np.arange(sum(Ns)+1,dtype=np.float32)
-        htot = getattr(ROOT,list_hist[0].__class__.__name__)(
-                    list_hist[0].GetName()+'tot',
-                    list_hist[0].GetTitle()+'tot',
-                    edges.shape[0]-1,
-                    edges)
+        # Get characteristics of one of the histograms #
+        h_dummy = None
+        for h in list_hist:
+            if h is not None:
+                h_dummy = h
+        if h_dummy is None: # No histogram taken from fitdiag file #
+            return None
+        htot = getattr(ROOT,h_dummy.__class__.__name__)(
+                         h_dummy.GetName()+'tot',
+                         h_dummy.GetTitle()+'tot',
+                         edges.shape[0]-1,
+                         edges)
+        # Fill the histogram #
         i = 1
         for h,N in zip(list_hist,Ns):
             for j in range(1,N+1):
@@ -965,68 +975,3 @@ class PostfitPlots:
         return [label_cms, label_preliminary, label_luminosity]
 
 
-
-
-if __name__ == '__main__':
-    plot_options = {
-        'legend': {
-            'columns': 3,
-            'textsize': 0.05,
-            'textfont': 42,
-            'headersize': 0.07,
-            'headerfont': 62,
-         },
-        'x-axis': {'textsize': 0.1,
-                   'labelsize': 0.1,
-                   'offset': 1.2,
-                   'label': 'DNN score bin #',
-        },
-        'y-axis': {'textsize': 0.06,
-                   'labelsize': 0.05,
-                   'offset': 1.2,
-                   'label': 'Events',
-                   #'min': 1e-3,
-                   #'max': 1e11,
-        },
-        'logy': True,
-        'logx': False,
-        'ratio':{#'min': -0.60,
-                 #'max': 0.60,
-                 'offset': 0.8,
-                 'titlesize': 0.08,
-                 'labelsize': 0.1,
-        },
-        'labels':{
-            'textsize': 0.06,
-        }
-    }
-
-
-
-                
-                
-    PostfitPlots(bin_name   = 'other',
-                 output_path = 'test',
-                 fit_diagnostics_path = '/nfs/scratch/fynu/fbury/Datacards/bbww_dl/Resonant/datacard_fit_Resonant_HighMass_Graviton_2D_syst_M_650_FR2/prefit/fitDiagnosticsHHbbWW.root',
-                 processes = {'TT':{'group':'TT','type':'mc','color':'#992233','label':'TT'},
-                              'Other_bbWW':{'group':'other','type':'mc','color':5,'label':'Other'},
-                              'DY':{'group':'DY','type':'mc','color':4,'label':'DY'},
-                              'ST':{'group':'ST','type':'mc','color':3,'label':'ST'},
-                              'Fakes':{'group':'Fakes','type':'mc','color':6,'label':'Fakes'},
-                              'signal_ggf_spin2_650_hbbhwwdl':{'group':'HH','type':'signal','color':4,'label':'signal'},
-                              },
-                 fit_type = 'prefit',
-                 header   = 'test',
-                 analysis = 'HH',
-                 eras     = ['2016'],
-                 categories = ['HH_DL_650_resolved_other','HH_DL_650_boosted_other','HH_DL_650_inclusive_DY_VVV'],
-                 plot_options = plot_options,
-                 labels   = ['resolved','boosted','DY'],
-                 label_positions = None,
-                 unblind= False,
-                 show_ratio = True,
-                 verbose = True,
-                 sort_by_yield=True)
-
-
-    
