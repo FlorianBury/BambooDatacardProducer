@@ -30,7 +30,7 @@ class PostfitPlots:
             - categories [list(str)]        : names of the categories (= combine bins) to be taken from the fitdiag file (without the era in the name)
             - bin_edges [list(list/float)]  : list of bin edges to rebin the histogram from combine (if multiple categories, need to provide one set of bin edges per category)
             - labels [list(str)]            : list of categories labels to be put on top of each category (if several) [OPTIONAL]
-            - label_positions [list(float)] : x positions of the labels [OPTIONAL], if not provided and labels is, will find some "smart" positions
+            - label_positions [list(float)] : x positions of the labels [OPTIONAL], if not provided and labels are, will find some "smart" positions
             - plot_options [dict]           : plotting options to override default [see below]
             - unblind [bool]                : whether to show data [DEFAULT=False]
             - show_ratio [bool]             : whether to show the bottom plot [DEFAULT=False]
@@ -123,7 +123,6 @@ class PostfitPlots:
 
         if not verbose:
             logging.getLogger().setLevel(logging.INFO)
-
 
         # Determine the folder name #
         if self._fit_type == 'prefit':
@@ -221,7 +220,15 @@ class PostfitPlots:
                        self._histograms[cat]['data'].GetErrorXhigh(i),
                        math.sqrt(self._histograms[cat]['data'].GetErrorYlow(i)),
                        math.sqrt(self._histograms[cat]['data'].GetErrorYhigh(i)))
-                    
+
+        # Get the number of bins for each category #
+        self._bins = []
+        for cat in self._histograms.keys():
+            for h in self._histograms[cat].values():
+                if h.__class__.__name__.startswith('TH1'):
+                    self._bins.append(h.GetNbinsX())
+                    break
+
         # Declare legend #
         legend = self._getLegend()
 
@@ -368,6 +375,12 @@ class PostfitPlots:
                                 
         canvas.Print(pdfPath)
         logging.info(f'Plot saved as {pdfPath}')
+
+        # Give ownership of the histograms to python so it can use the garbage cleaning #
+        for cat in self._histograms.keys():
+            for group in self._histograms[cat].keys():
+                if self._histograms[cat][group] is not None:
+                    ROOT.SetOwnership(self._histograms[cat][group], True)
                                          
 
     def _getProcesses(self,folder,cat):
@@ -389,7 +402,7 @@ class PostfitPlots:
                 h.Sumw2()
 
             # In case group no there yet, copy it (to avoid disappearance after file closed) #
-            if processCfg['group'] not in self._histograms[cat].keys():
+            if processCfg['group'] not in self._histograms[cat].keys() or self._histograms[cat][processCfg['group']] is None:
                 self._histograms[cat][processCfg['group']] = copy.deepcopy(h)
             # Group already there, add it #
             else:
@@ -476,22 +489,17 @@ class PostfitPlots:
 
     def _processDataGraphs(self,list_data):
         # Concatenate several tgraphs into one #
+        Ns = [g.GetN() for g in list_data]
         if self._bin_edges is not None:
             if len(self._bin_edges) != len(list_data):
                 raise RuntimeError(f'There are {len(list_hist)} histograms but only {len(self._bin_edges)} bin edges sets have been provided')
             widths = np.concatenate([np.diff(bin_edges) for bin_edges in self._bin_edges],axis=0)
-            edges = np.concatenate([np.array([0]),np.cumsum(widths)],axis=0)
-            xvals = (edges[1:]+edges[:-1])/2
-            xerror_low = xvals-edges[:-1]
-            xerror_high = edges[1:]-xvals
         else:
-            xvals = [np.array(g.GetX()) for g in list_data]
-            for i in range(1,len(xvals)):
-                xvals[i] += xvals[i-1][-1]
-            xvals = np.concatenate(xvals,axis=0)
-            xerror_low  = [g.GetErrorXlow(i) for g in list_data for i in range(0,g.GetN())]
-            xerror_high = [g.GetErrorXhigh(i) for g in list_data for i in range(0,g.GetN())]
-        Ns = [g.GetN() for g in list_data]
+            widths = np.ones(sum(Ns))
+        edges = np.concatenate([np.array([0]),np.cumsum(widths)],axis=0)
+        xvals = (edges[1:]+edges[:-1])/2
+        xerror_low = xvals-edges[:-1]
+        xerror_high = edges[1:]-xvals
         yvals = np.concatenate([np.array(g.GetY()) for g in list_data],axis=0)
         yerror_low  = [g.GetErrorYlow(i) for g in list_data for i in range(0,g.GetN())]
         yerror_high = [g.GetErrorYhigh(i) for g in list_data for i in range(0,g.GetN())]
@@ -515,7 +523,7 @@ class PostfitPlots:
             widths = np.concatenate([np.diff(bin_edges) for bin_edges in self._bin_edges],axis=0)
             edges = np.concatenate([np.array([0]),np.cumsum(widths)],axis=0)
         else:
-            Ns = [h.GetNbinsX() for h in list_hist]
+            Ns = self._bins
             edges = np.arange(sum(Ns)+1,dtype=np.float32)
         # Get characteristics of one of the histograms #
         h_dummy = None

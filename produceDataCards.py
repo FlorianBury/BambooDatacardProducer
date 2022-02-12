@@ -1825,10 +1825,13 @@ class Datacard:
                 with open(path_data,'r') as handle:
                     plotLinearizeData[category] = json.load(handle)
 
+        missingTxt = ""
         for cat in histConverter.keys():
             for group in self.groups.keys():
                 if len(content[cat][group]) == 0:
-                    logging.warning(f"Group {group} in category {cat} is empty")
+                    missingTxt += f"\nGroup {group} in category {cat} is empty"
+        if len(missingTxt) > 0:
+            raise RuntimeError('There are missing histograms :'+missingTxt)
 
         # Write to files #
         for group in self.groups.keys():
@@ -2839,9 +2842,9 @@ class Datacard:
                     else:
                         processes = getProcesses(self.groups)
                 
-                        
+                    eras_plots = [list(eras_in_bins)] if split_eras else eras
                     for plotCfg in combineCfg['plots']:
-                        for era in eras:
+                        for era in eras_plots:
                             plotCfg.update({'fit_diagnostics_path'  : fitdiagFile,
                                             'output_path'           : subdirBin,
                                             'processes'             : processes,
