@@ -177,19 +177,52 @@ class UnderlyingEvent:
                     groups.append(group)
         return groups
 
+    def _getFactors1D(self,cat,group,x):
+        up, down  = 1.,1.
+        idx = -1
+        for i,binCfg in enumerate(self.content[cat][group]):
+            if x > binCfg['bin'][0] and x < binCfg['bin'][1]:
+                up = binCfg['up']
+                down = binCfg['down']
+                idx = i
+                break
+        if idx != -1:
+            del self.content[cat][group][idx]
+        return up, down
+
+    def _getFactors2D(self,cat,group,x,y):
+        up, down  = 1.,1.
+        idx = -1
+        for i,binCfg in enumerate(self.content[cat][group]):
+            if x > binCfg['binx'][0] and x < binCfg['binx'][1] and y > binCfg['biny'][0] and y < binCfg['biny'][1]:
+                up = binCfg['up']
+                down = binCfg['down']
+                idx = i
+                break
+        if idx != -1:
+            del self.content[cat][group][idx]
+        return up, down
+
     def additional(self,h,cat,group,systName,**kwargs):
         if group in self.content[cat].keys():
             h_up = h.Clone(f"{h.GetName()}_{systName}_up")
             h_down = h.Clone(f"{h.GetName()}_{systName}_down")
-            if isinstance(h,ROOT.TH1):
+            if h.__class__.__name__.startswith('TH1'):
                 for i in range(1,h.GetNbinsX()+1):
                     x = h.GetXaxis().GetBinCenter(i)
-                    y = h.GetBinContent(i)
-                    for binCfg in self.content[cat][group]:
-                        if x > binCfg['bin'][0] and x < binCfg['bin'][1]:
-                            h_up.SetBinContent(i,y*binCfg['up'])
-                            h_down.SetBinContent(i,y*binCfg['down'])
-                            break
+                    val = h.GetBinContent(i)
+                    up,down = self._getFactors1D(cat,group,x)
+                    h_up.SetBinContent(i,val*up)
+                    h_down.SetBinContent(i,val*down)
+            elif h.__class__.__name__.startswith('TH2'):
+                for i in range(1,h.GetNbinsX()+1):
+                    for j in range(1,h.GetNbinsY()+1):
+                        x = h.GetXaxis().GetBinCenter(i)
+                        y = h.GetYaxis().GetBinCenter(j)
+                        val = h.GetBinContent(i)
+                        up,down = self._getFactors2D(cat,group,x,y)
+                        h_up.SetBinContent(i,val*up)
+                        h_down.SetBinContent(i,val*down)
             else:
                 raise ValueError(f'Histogram type {h.__class__.__name__} from systematic {systName} not understood')
 
