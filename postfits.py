@@ -521,7 +521,6 @@ class PostfitPlots:
         yerror_low  = [g.GetErrorYlow(i) for g in list_data for i in range(0,g.GetN())]
         yerror_high = [g.GetErrorYhigh(i) for g in list_data for i in range(0,g.GetN())]
         gtot = ROOT.TGraphAsymmErrors(sum(Ns))
-        embed()
         for i in range(0,sum(Ns)):
             gtot.SetPoint(i,xvals[i],yvals[i])
             gtot.SetPointError(i,
