@@ -60,13 +60,14 @@ COMBINE_DEFAULT_ARGS = [
 
 
 class Datacard:
-    def __init__(self,outputDir=None,configPath=None,path=None,yamlName=None,worker=None,groups=None,shapeSyst=None,normSyst=None,histConverter=None,era=None,use_syst=False,root_subdir=None,histCorrections=None,pseudodata=False,rebin=None,histEdit=None,textfiles=None,plotIt=None,combineConfigs=None,logName=None,custom_args=None,save_datacard=True,**kwargs):
+    def __init__(self,outputDir=None,configPath=None,path=None,yamlName=None,worker=None,groups=None,shapeSyst=None,normSyst=None,histConverter=None,era=None,use_syst=False,include_overflow=False,root_subdir=None,histCorrections=None,pseudodata=False,rebin=None,histEdit=None,textfiles=None,plotIt=None,combineConfigs=None,logName=None,custom_args=None,save_datacard=True,**kwargs):
         self.outputDir          = outputDir
         self.configPath         = configPath
         self.path               = path
         self.worker             = worker
         self.era                = era
         self.use_syst           = use_syst
+        self.include_overflow   = include_overflow
         self.yamlName           = yamlName
         self.root_subdir        = root_subdir
         self.pseudodata         = pseudodata
@@ -364,6 +365,70 @@ class Datacard:
                     hist.SetName(name)
                     hist.SetTitle(name)
 
+        # Overflow bins #
+        for histName in self.content.keys(): 
+            for group in self.content[histName].keys():
+                for h in self.content[histName][group].values():
+                    if h.__class__.__name__.startswith('TH1'):
+                        if self.include_overflow:
+                            # Include under and overflow bins
+                            N = h.GetNbinsX()
+                            h.SetBinContent(1,h.GetBinContent(1)+h.GetBinContent(0))
+                            h.SetBinError(1,math.sqrt(h.GetBinError(1)**2+h.GetBinError(0)**2))
+                            h.SetBinContent(N,h.GetBinContent(N)+h.GetBinContent(N+1))
+                            h.SetBinError(N,math.sqrt(h.GetBinError(N)**2+h.GetBinError(N+1)**2))
+                        # Set under-over flow bins to zero (to avoid confusion)
+                        h.SetBinContent(0,0.)
+                        h.SetBinError(0,0.)
+                        h.SetBinContent(N+1,0.)
+                        h.SetBinError(N+1,0.)
+                    elif h.__class__.__name__.startswith('TH2'):
+                        Nx = h.GetNbinsX()
+                        Ny = h.GetNbinsX()
+                        # Loop over right and left egdes outside the TH2 #
+                        for y in range(1,Ny+1):
+                            if self.include_overflow:
+                                h.SetBinContent(1,y,h.GetBinContent(1,y)+h.GetBinContent(0,y))
+                                h.SetBinError(1,y,math.sqrt(h.GetBinError(1,y)**2+h.GetBinError(0,y)**2))
+                                h.SetBinContent(Nx,y,h.GetBinContent(Nx,y)+h.GetBinContent(Nx+1,y))
+                                h.SetBinError(Nx,y,math.sqrt(h.GetBinError(Nx,y)**2+h.GetBinError(Nx+1,y)**2))
+                            h.SetBinContent(0,y,0.)
+                            h.SetBinError(0,y,0.)
+                            h.SetBinContent(Nx+1,y,0.)
+                            h.SetBinError(Nx+1,y,0.)
+                        # Loop over bottom and top egdes outside the TH2 #
+                        for x in range(1,Nx+1):
+                            if self.include_overflow:
+                                h.SetBinContent(x,1,h.GetBinContent(x,1)+h.GetBinContent(x,0))
+                                h.SetBinError(x,1,math.sqrt(h.GetBinError(x,1)**2+h.GetBinError(x,0)**2))
+                                h.SetBinContent(x,Ny,h.GetBinContent(x,Ny)+h.GetBinContent(x,Ny+1))
+                                h.SetBinError(x,Ny,math.sqrt(h.GetBinError(x,Ny)**2+h.GetBinError(x,Ny+1)**2))
+                            h.SetBinContent(x,0,0.)
+                            h.SetBinError(x,0,0.)
+                            h.SetBinContent(x,Ny+1,0.)
+                            h.SetBinError(x,Ny+1,0.)
+                        # Four corners of the TH2 #
+                        if self.include_overflow:
+                            h.SetBinContent(1,1,h.GetBinContent(1,1)+h.GetBinContent(0,0))
+                            h.SetBinError(1,1,math.sqrt(h.GetBinError(1,1)**2+h.GetBinError(0,0)**2))
+                            h.SetBinContent(1,Ny,h.GetBinContent(1,Ny)+h.GetBinContent(0,Ny+1))
+                            h.SetBinError(1,Ny,math.sqrt(h.GetBinError(1,Ny)**2+h.GetBinError(0,Ny+1)**2))
+                            h.SetBinContent(Nx,1,h.GetBinContent(Nx,1)+h.GetBinContent(Nx+1,0))
+                            h.SetBinError(Nx,1,math.sqrt(h.GetBinError(Nx,1)**2+h.GetBinError(Nx+1,0)**2))
+                            h.SetBinContent(Nx,Ny,h.GetBinContent(Nx,Ny)+h.GetBinContent(Nx+1,Ny+1))
+                            h.SetBinError(Nx,Ny,math.sqrt(h.GetBinError(Nx,Ny)**2+h.GetBinError(Nx+1,Ny+1)**2))
+                        h.SetBinContent(0,0,0.)
+                        h.SetBinError(0,0,0.)
+                        h.SetBinContent(0,Ny+1,0,0.)
+                        h.SetBinError(0,Ny+1,0,0.)
+                        h.SetBinContent(Nx+1,0,0.)
+                        h.SetBinError(Nx+1,0,0.)
+                        h.SetBinContent(Nx+1,Ny+1,0.)
+                        h.SetBinError(Nx+1,Ny+1,0.)
+                    else:
+                        raise NotImplementedError
+
+
     def addSampleToGroup(self,sample,group,hist_dict):
         used = False
         for histname,hists in hist_dict.items():
@@ -629,9 +694,6 @@ class Datacard:
         # Normalize hist to data #
         if lumi is not None and xsec is not None and br is not None and sumweight is not None:
             h.Scale(lumi*xsec*br/sumweight)
-        # Cutout under/over-flow bins #
-        h.SetBinContent(0,0.)
-        h.SetBinContent(h.GetNbinsX()+1,0.)
         return h
              
     def loadYaml(self):
@@ -769,7 +831,7 @@ class Datacard:
         len_groups = max([len(group) for group in self.groups.keys()]+[1])
 
         def printout(group,y_before,y_after):
-            diff = abs(y_after[0]-y_before[0])/y_before[0]*100 if y_after[0] != 0 else 0.
+            diff = abs(y_after[0]-y_before[0])/y_before[0]*100 if y_before[0] != 0 else 0.
             string = f'{group:{len_groups+3}s} : yield (before operations) = {y_before[0]:12.3f} +/- {y_before[1]:10.3f} -> yield (after) = {y_after[0]:12.3f} +/- {y_after[1]:10.3f} [{diff:+5.2f}%]'
             logging.info(f'    {string}')
             return len(string)
@@ -875,9 +937,10 @@ class Datacard:
                                     raise RuntimeError(f"Could not find syst named {systNameDown} in group {group} for histogram {histName}")
 
                                 # Fix shape in case needed #
-                                self.fixHistograms(hnom  = self.content[histName][group]['nominal'],
-                                                    hup   = self.content[histName][group][systNameUp],
-                                                    hdown = self.content[histName][group][systNameDown])
+                                if group != 'data_obs':
+                                    self.fixHistograms(hnom  = self.content[histName][group]['nominal'],
+                                                        hup   = self.content[histName][group][systNameUp],
+                                                        hdown = self.content[histName][group][systNameDown])
 
                                 # Write to file #
                                 CMSNameUp   = f"{group}__{CMSName}Up"
@@ -896,7 +959,8 @@ class Datacard:
                     # Save nominal (done after because can be correct when fixing systematics) #
                     if 'nominal' not in self.content[histName][group].keys():
                         raise RuntimeError(f"Group {group} nominal histogram {histName} was not found")
-                    self.fixHistograms(hnom=self.content[histName][group]['nominal'])
+                    if group != 'data_obs':
+                        self.fixHistograms(hnom=self.content[histName][group]['nominal'])
 
 
                     self.content[histName][group]['nominal'].SetTitle(group)
