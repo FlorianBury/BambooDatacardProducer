@@ -246,7 +246,7 @@ class PostfitPlots:
                 # Esthetics #
                 self._histograms['__combined__']['data'].SetMarkerColor(1)
                 self._histograms['__combined__']['data'].SetMarkerStyle(20)
-                self._histograms['__combined__']['data'].SetMarkerSize(0.8)
+                self._histograms['__combined__']['data'].SetMarkerSize(1.)
                 self._histograms['__combined__']['data'].SetLineColor(1)
                 self._histograms['__combined__']['data'].SetLineWidth(1)
                 self._histograms['__combined__']['data'].SetLineStyle(1)
@@ -322,7 +322,7 @@ class PostfitPlots:
         stack_MC.Draw('hist same')
         stack_MC.Draw('hist same axis') # otherwise erases the axes
         # Draw uncertainty #
-        self._histograms['__combined__']['total'].Draw('e2 same')
+        self._histograms['__combined__']['total'].Draw('E2 same')
         # Draw signals 
         for group in self._order:
             # Get options #
@@ -334,7 +334,7 @@ class PostfitPlots:
 
         # Draw data if unblinded #
         if self._unblind:
-            self._histograms['__combined__']['data'].Draw('e1p same')
+            self._histograms['__combined__']['data'].Draw('E1P same')
         # Draw lumi labels #
         CMS_labels = self._getCMSLabels(lumi)
         for label in CMS_labels:
@@ -357,13 +357,17 @@ class PostfitPlots:
             bottomPad.Draw()
             bottomPad.cd()
             # Get ratios #
-            err_hist = self._getTotalHistError(self._histograms['__combined__']['total'])
-            self._changeLabels(err_hist)
-            err_hist.Draw('e2 hist')
             if self._unblind:
-                err_data = self._getDataError(self._histograms['__combined__']['total'],
-                                              self._histograms['__combined__']['data'])
-                err_data.Draw('e1P same')
+                err_data,maxabsr = self._getDataError(self._histograms['__combined__']['total'],
+                                                      self._histograms['__combined__']['data'])
+                # Need to get first to get range of data points for the ratio #
+            else:
+                maxabsr = 0.
+            err_hist = self._getTotalHistError(self._histograms['__combined__']['total'],maxabsr)
+            self._changeLabels(err_hist)
+            err_hist.Draw('E2 hist')
+            if self._unblind:
+                err_data.Draw('E1P same')
             logging.debug('... done')
 
         # Save to pdf # 
@@ -446,12 +450,23 @@ class PostfitPlots:
                                        
     @staticmethod
     def _getNonZeroHistogram(h):
-        content = []
-        error   = []
+        """
+            When several categories with different ranges are given to FitDiagnostic
+            it zero padds the categories with fewer bins 
+            -> we need to cut out this range of 0-content on the right of the histogram
+            BUT we do not want to exclude valid bins that just happen to have 0 content
+        """
+        # Get content #
+        content = np.zeros(h.GetNbinsX())
+        error   = np.zeros(h.GetNbinsX())
         for i in range(1,h.GetNbinsX()+1):
-            if h.GetBinContent(i) > 0 and h.GetBinError(i)>0:
-                content.append(h.GetBinContent(i))
-                error.append(h.GetBinError(i))
+            content[i-1] = h.GetBinContent(i)
+            error[i-1]   = h.GetBinError(i)
+        # Find the last bin before a continuous range of 0 until end of content
+        if content[-1] == 0.:
+            cut_idx = np.where(np.diff((content==0.)*1) != 0)[0][-1] + 1
+            content = content[:cut_idx]
+            error   = error[:cut_idx]
         h_tmp = getattr(ROOT,h.__class__.__name__)(h.GetName(),
                                                    h.GetTitle(),
                                                    len(content),
@@ -465,19 +480,23 @@ class PostfitPlots:
         
     @staticmethod
     def _getNonZeroGraph(g):
-        x = list(g.GetX())
-        y = list(g.GetY())
-        g_tmp = getattr(ROOT,g.__class__.__name__)(sum([_y>0 for _y in y]))
-        j = 0
+        x = np.array(g.GetX())
+        y = np.array(g.GetY())
+        # Find the last bin before a continuous range of 0 until end of content
+        if y[-1] == 0.:
+            cut_idx = np.where(np.diff((y==0.)*1) != 0)[0][-1] + 1
+            y = y[:cut_idx]
+            x = x[:cut_idx]
+        # Hide zero values of the graph #
+        y[np.where(y==0.)] = -100.
+        g_tmp = getattr(ROOT,g.__class__.__name__)(len(y))
         for i in range(len(x)):
-            if y[i] > 0:
-                g_tmp.SetPoint(j,x[i],y[i])
-                g_tmp.SetPointError(j,
-                       g.GetErrorXlow(i),
-                       g.GetErrorXhigh(i),
-                       g.GetErrorYlow(i),
-                       g.GetErrorYhigh(i))
-                j += 1
+            g_tmp.SetPoint(i,x[i],y[i])
+            g_tmp.SetPointError(i,
+                   g.GetErrorXlow(i),
+                   g.GetErrorXhigh(i),
+                   g.GetErrorYlow(i) if y[i] > 0. else 0.,
+                   g.GetErrorYhigh(i) if y[i] > 0. else 0.)
         return g_tmp
         
 
@@ -507,8 +526,8 @@ class PostfitPlots:
         for i in range(0,sum(Ns)):
             gtot.SetPoint(i,xvals[i],yvals[i])
             gtot.SetPointError(i,
-                               xerror_low[i],
-                               xerror_high[i],
+                               0., #xerror_low[i],
+                               0., #xerror_high[i],
                                yerror_low[i],
                                yerror_high[i])
         # Return #
@@ -551,7 +570,7 @@ class PostfitPlots:
         # Return #
         return htot
         
-    def _getTotalHistError(self,total_hist):
+    def _getTotalHistError(self,total_hist,maxabsr=0.):
         # Declare hist #
         edges = np.array([total_hist.GetXaxis().GetBinLowEdge(i) 
                     for i in range(1,total_hist.GetNbinsX()+2)], dtype=np.float32)
@@ -570,16 +589,18 @@ class PostfitPlots:
         total_err.GetXaxis().SetLabelSize(0.10)
         total_err.GetXaxis().SetLabelColor(1)
         total_err.SetMarkerSize(0)
+        total_err.SetMarkerColor(12)
         total_err.SetFillColorAlpha(12, 0.40)
+        total_err.SetMarkerColorAlpha(12,0.40)
         total_err.SetLineWidth(2)
         total_err.SetLineStyle(2)
 
         total_hist.SetMarkerSize(0)
+        total_hist.SetMarkerColorAlpha(12,0.40)
         total_hist.SetLineWidth(0)
         total_hist.SetFillColorAlpha(12, 0.40)
 
         # Fill #
-        maxabsr = 0.
         for i in range(1,total_hist.GetNbinsX()+1):
             total_err.SetBinContent(i,0.)
             err = total_hist.GetBinError(i)/total_hist.GetBinContent(i)
@@ -613,6 +634,7 @@ class PostfitPlots:
         err = ROOT.TGraphAsymmErrors(data.GetN())
 
         # Bin content loop #
+        maxabsr = 0.
         for i in range(data.GetN()):
             bin_width = total_hist.GetBinWidth(i+1)
             dividend = total_hist.GetBinContent(i+1) * bin_width
@@ -623,24 +645,34 @@ class PostfitPlots:
                 else:
                     err.SetPoint(i,total_hist.GetBinCenter(i+1), -1. )
             else:
+                    # Hide it #
                     err.SetPoint(i,total_hist.GetBinCenter(i+1), -100. )
 
             # Set point error #
-            err.SetPointEYlow(i,  data.GetErrorYlow(i) / dividend)
-            err.SetPointEYhigh(i, data.GetErrorYhigh(i) / dividend)
-            err.SetPointEXlow(i,  bin_width / 2.0)
-            err.SetPointEXhigh(i, bin_width / 2.0)
+            err_up = data.GetErrorYhigh(i) / dividend
+            err_down = data.GetErrorYlow(i) / dividend
+            err.SetPointEYlow(i,  err_down)
+            err.SetPointEYhigh(i, err_up)
+            #err.SetPointEXlow(i,  bin_width / 2.0)
+            #err.SetPointEXhigh(i, bin_width / 2.0)
+            err.SetPointEXlow(i,  0.)
+            err.SetPointEXhigh(i, 0.)
+            # Check max variation #
+            if err_up > maxabsr:
+                maxabsr = err_up
+            if err_down > maxabsr:
+                maxabsr = err_down
             
         # Esthetics #
         err.SetMarkerColor(1)
         err.SetMarkerStyle(20)
-        err.SetMarkerSize(0.8)
+        err.SetMarkerSize(1.)
         err.SetLineColor(1)
         err.SetLineWidth(1)
         err.SetLineStyle(1)
 
         # Return #
-        return err
+        return err,maxabsr
 
     def _getTemplate(self):
         # Set bin content #
@@ -656,7 +688,7 @@ class PostfitPlots:
         if 'logy' in self._plot_options.keys() and self._plot_options['logy']:
             # If log, need to adapt min and max
             miny = 1e-2 
-            maxy *= 1e6
+            maxy *= 1e4
         else:
             miny = 0.
             maxy *= 2.0
