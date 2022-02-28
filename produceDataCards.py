@@ -816,9 +816,15 @@ class Datacard:
                 # Get yields from histogram #
                 h = self.content[histName][group]['nominal']
                 if h.__class__.__name__.startswith('TH1'):
-                    integral = h.IntegralAndError(1,h.GetNbinsX(),err)
+                    if self.include_overflow:
+                        integral = h.IntegralAndError(0,h.GetNbinsX()+1,err)
+                    else:
+                        integral = h.IntegralAndError(1,h.GetNbinsX(),err)
                 elif h.__class__.__name__.startswith('TH2'):
-                    integral = h.IntegralAndError(1,h.GetNbinsX(),1,h.GetNbinsY(),err)
+                    if self.include_overflow:
+                        integral = h.IntegralAndError(0,h.GetNbinsX()+1,0,h.GetNbinsY()+1,err)
+                    else:
+                        integral = h.IntegralAndError(1,h.GetNbinsX(),1,h.GetNbinsY(),err)
                 else:
                     raise ValueError
                 yields[histName][group] = (integral,err.value)
