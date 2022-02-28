@@ -8,6 +8,8 @@ from scipy.stats import chi2, norm
 from array import array
 import ROOT
 
+from IPython import embed
+
 from numpy_hist import NumpyHist
 
 """
@@ -217,6 +219,7 @@ class Quantile(Rebin):
         # Process histograms #
         nph = self._processHist(h)
         nbins = q.shape[0] - 1 
+        x = (nph.e[:-1]+nph.e[1:])/2
         if nph.w[nph.w>0].shape[0] >= q.shape[0]:
             self.ne = nph.e[0]
             if nph.w[0] > q[1] * nph.w.sum(): # First bin has already more than first quantile bin
@@ -227,19 +230,23 @@ class Quantile(Rebin):
                 nph = nph.split(np.r_[nph.e[0],nph.e[1],nph.e[-1]])[1]
                 # Rescale the quantiles #
                 q = np.r_[0,np.cumsum(np.diff(q[1:])*1/(1-q[1]))]
+                # Recompute centers #
+                x = (nph.e[:-1]+nph.e[1:])/2
 
-            x = (nph.e[:-1]+nph.e[1:])/2
             nx = self.rebin_method(x[nph.w>0],nph.w[nph.w>0],q)
             idx = np.digitize(nx, nph.e) - 1
             self.ne = np.r_[self.ne,nph.e[idx],nph.e[-1]]
             self.ne,counts = np.unique(self.ne,return_counts=True)
             if (counts>1).any():
-                logging.warning(f'There were repetitions in the new binning : {ne}')
-        elif nph.w[w>0].shape[0] == 0:   
-            self.ne = np.array([e[0],e[-1]])
+                logging.warning(f'There were repetitions in the new binning : {self.ne}')
+        elif nph.w[nph.w>0].shape[0] == 0:   
+            self.ne = np.array([nph.e[0],nph.e[-1]])
         else:
-            idx = np.digitize(x[nph.w>0], e) - 1
-            self.ne = np.r_[nph.e[0], nph.e[idx], nph.e[-1]]
+            idx = np.digitize(x[nph.w>0], nph.e) - 1
+            if len(idx)+1 > nbins:
+                self.ne = np.r_[nph.e[0], nph.e[idx[:len(idx)-nbins]], nph.e[-1]]
+            else:
+                self.ne = np.r_[nph.e[0], nph.e[idx], nph.e[-1]]
         # Make sure there are no zero-width bins #
         if self.ne.shape[0] != nbins + 1:
             raise RuntimeError(f'Error in quantile, hist will have {self.ne.shape[0]-1} bins, but you asked for {nbins} : bins = {self.ne}')
@@ -414,7 +421,7 @@ class Threshold2(Rebin):
            then move to next threshold
         list of threshold values need to be optimized
     """
-    def __init__(self, h_list, thresh, fallback):
+    def __init__(self, h_list, thresh, fallback, min_yield_per_bin=1., keep_non_convergence=False):
         """
             h_list : list of ROOT.TH1X or NumpyHist from all the processes
             thresh : thresholds to remain above
@@ -422,6 +429,8 @@ class Threshold2(Rebin):
                 - signal : should be np.inf (enforce at least an event in the bin)
                 - main backgrounds : should be sumw2/sumw
                 - other backgrounds : 0
+            keep_non_convergence : keep the bin edges found, even if the number of requested bins is not achieved
+
         """
         if not isinstance(thresh,np.ndarray):
             thresh = np.array(thresh)
@@ -449,16 +458,18 @@ class Threshold2(Rebin):
         data = data[valid_processes]
         fallback = fallback[valid_processes]
         # Get total of content #
-        totval = np.sum(data['value'],axis=0) # Sum over bin of all processes
+        totval = np.sum(data['value'][~np.isinf(fallback)],axis=0) # Sum over bin of all processes (except signal)
+        totvar = np.sum(data['variance'][~np.isinf(fallback)],axis=0) # Sum over bin of all processes (except signal)
+        nphtot = NumpyHist(e,totval,totvar**2)
         # Need to inverse because rebin_method goes from left to right
         data = data[:,::-1]
 
         # Threshold scan #
         logging.debug("Starting scan for Threshold2")
         nbins = thresh.shape[0]
-        variance_trials = 1
-        variance_trials_max = 10
-        while variance_trials < variance_trials_max:
+        trials = 1
+        trials_max = 10
+        while trials <= trials_max:
             factor = 1.
             epsilon = 0.01
             epsilon_min = epsilon * 1e-9
@@ -475,11 +486,22 @@ class Threshold2(Rebin):
                     idx = idx[1:]
                 # Make binning #
                 ne = np.unique(np.r_[e[0], e[idx] , e[-1]])
-                logging.debug(f'\tTrying factor {factor} (epsilon = {epsilon}), number of bins = {len(ne)}')
+                logging.debug(f'\tTrying factor {factor:.5f} (epsilon = {epsilon:.3e}), number of bins = {len(ne)-1}')
+                nphtest = nphtot.rebin(ne)
                 if ne.shape[0] <= nbins + 1: # Not too far
                     # if perfect number -> record it #
                     if ne.shape[0] == nbins + 1:
-                        self.ne = ne
+                        if keep_non_convergence:
+                            self.ne = ne
+                        else:
+                            if self.ne is None:
+                                self.ne = ne
+                            else:
+                                nphtest = nphtot.rebin(ne)
+                                if any(nphtest.w < min_yield_per_bin):
+                                    logging.debug(f'\tNew binning found but this attempt yields a bin below the minimum yield ({nphtest.w[nphtest.w<min_yield_per_bin]}), will not take into account')
+                                else:
+                                    self.ne = ne
                     # Iteration #
                     if factor - epsilon > 0 or epsilon < epsilon_min:
                         factor -= epsilon 
@@ -506,17 +528,27 @@ class Threshold2(Rebin):
                         break
             if self.ne is None: # Still not found 
                 self.ne = ne
-            if self.ne.shape[0] != nbins +1:
-                logging.warning(f'{self.ne.shape[0]-1} bins were produced, but you asked for {nbins}, will artificially divide the variance by 2 to help convergence [Attempt {variance_trials}/{variance_trials_max}]')
-                data['variance'] /= 2
-                variance_trials += 1
-                if variance_trials == 5:
-                    logging.warning('Does not seem to converge ... Will cancel all fallbacks')
-                    fallback = np.zeros(data.shape[0])
-            else:
+            if keep_non_convergence:
                 break
+            else:
+                nphtest = nphtot.rebin(self.ne)
+                if any(nphtest.w < min_yield_per_bin):
+                    logging.warning(f'Found binning {self.ne}, but the following bins are below the min_yield_per_bin : {nphtest.w[nphtest.w<min_yield_per_bin]} < {min_yield_per_bin}')
+                    logging.warning(f'Will modify the thresholds from {thresh}')
+                    thresh[np.argwhere(nphtest.w[::-1]>=min_yield_per_bin).ravel()] /= 2 #*= 0.8
+                    logging.warning(f'\t-> to {thresh} [Attempt {trials}/{trials_max}]')
+                    trials += 1
+                elif self.ne.shape[0] != nbins + 1 :
+                    logging.warning(f'{self.ne.shape[0]-1} bins were produced, but you asked for {nbins}, will artificially divide the variance by 2 to help convergence [Attempt {trials}/{trials_max}]')
+                    data['variance'] /= 2
+                    trials += 1
+                    if trials == trials_max:
+                        logging.warning('Does not seem to converge ... Will cancel all fallbacks')
+                        fallback = np.zeros(data.shape[0])
+                else:
+                    break
 
-        if self.ne.shape[0] != nbins + 1:
+        if self.ne.shape[0] != nbins + 1 and not keep_non_convergence:
             raise RuntimeError(f'Error in threshold, hist will have {self.ne.shape[0]-1} bins, but you asked for {nbins} : bins = {self.ne}')
             # Because can be a problem for combination
         logging.debug(f'Found binning : {self.ne}')
@@ -570,6 +602,7 @@ class Boundary(Rebin):
             raise RuntimeError("Boundary method requires to set the boundaries")
         if not isinstance(boundaries,np.ndarray):
             boundaries = np.array(boundaries)
+        assert boundaries.ndim == 1
         self.ne = boundaries
 
 class Boundary2D(Rebin):
