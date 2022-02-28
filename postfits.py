@@ -388,6 +388,7 @@ class PostfitPlots:
                                          
 
     def _getProcesses(self,folder,cat):
+        n_bins = 0
         for process,processCfg in self._processes.items():
             if not folder.GetListOfKeys().FindObject(process):
                 logging.warning(f'Process `{process}` not found in folder `{folder.GetTitle()}`')
@@ -398,6 +399,8 @@ class PostfitPlots:
                 continue # Done in the end 
             # Get non zero bins #
             h = self._getNonZeroHistogram(folder.Get(process))
+            if h.GetNbinsX() > n_bins:
+                n_bins = h.GetNbinsX()
             p_max_len = max([len(name) for name in self._processes.keys()]) + 3
             logging.debug(f'Looking at process {process:{p_max_len}s} - yield = {h.Integral():12.5f}')
             
@@ -417,7 +420,7 @@ class PostfitPlots:
                 # Merge #
                 self._histograms[cat][processCfg['group']].Add(h)
         # Add data #
-        data = self._getNonZeroGraph(copy.deepcopy(folder.Get('data')))
+        data = self._getNonZeroGraph(copy.deepcopy(folder.Get('data')),n_bins)
 
         # Need to square the errors so we can add them if needed, and use the sqrt later 
         for i in range(data.GetN()):
@@ -479,14 +482,9 @@ class PostfitPlots:
         return h_tmp
         
     @staticmethod
-    def _getNonZeroGraph(g):
-        x = np.array(g.GetX())
-        y = np.array(g.GetY())
-        # Find the last bin before a continuous range of 0 until end of content
-        if y[-1] == 0.:
-            cut_idx = np.where(np.diff((y==0.)*1) != 0)[0][-1] + 1
-            y = y[:cut_idx]
-            x = x[:cut_idx]
+    def _getNonZeroGraph(g,N):
+        x = np.array(g.GetX())[:N]
+        y = np.array(g.GetY())[:N]
         # Hide zero values of the graph #
         y[np.where(y==0.)] = -100.
         g_tmp = getattr(ROOT,g.__class__.__name__)(len(y))
@@ -523,6 +521,7 @@ class PostfitPlots:
         yerror_low  = [g.GetErrorYlow(i) for g in list_data for i in range(0,g.GetN())]
         yerror_high = [g.GetErrorYhigh(i) for g in list_data for i in range(0,g.GetN())]
         gtot = ROOT.TGraphAsymmErrors(sum(Ns))
+        embed()
         for i in range(0,sum(Ns)):
             gtot.SetPoint(i,xvals[i],yvals[i])
             gtot.SetPointError(i,
@@ -688,7 +687,7 @@ class PostfitPlots:
         if 'logy' in self._plot_options.keys() and self._plot_options['logy']:
             # If log, need to adapt min and max
             miny = 1e-2 
-            maxy *= 1e4
+            maxy *= 1e5
         else:
             miny = 0.
             maxy *= 2.0
