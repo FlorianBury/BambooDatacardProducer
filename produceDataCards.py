@@ -370,9 +370,9 @@ class Datacard:
             for group in self.content[histName].keys():
                 for h in self.content[histName][group].values():
                     if h.__class__.__name__.startswith('TH1'):
+                        N = h.GetNbinsX()
                         if self.include_overflow:
                             # Include under and overflow bins
-                            N = h.GetNbinsX()
                             h.SetBinContent(1,h.GetBinContent(1)+h.GetBinContent(0))
                             h.SetBinError(1,math.sqrt(h.GetBinError(1)**2+h.GetBinError(0)**2))
                             h.SetBinContent(N,h.GetBinContent(N)+h.GetBinContent(N+1))
@@ -1620,14 +1620,15 @@ class Datacard:
         """
         from Rebinning import Threshold2
         assert isinstance(params,list)
-        assert len(params) == 2
+        assert len(params) == 2 or len(params) == 3
         assert isinstance(params[0],list) 
         assert isinstance(params[1],list) 
         thresholds          = params[0]
         main                = params[1]
+        min_yield_per_bin   = params[2] if len(params) == 3 else 1.
         hists_for_binning, fallback = self._getHistAndFallBack(histName,main)
         # Make rebinning object and apply #
-        tObj = Threshold2(hists_for_binning,thresholds,fallback)
+        tObj = Threshold2(hists_for_binning,thresholds,fallback,min_yield_per_bin)
         if logging.root.level <= 10:
             pbar = enlighten.Counter(total=self.countPerHistName(histName), desc='Progress', unit='histograms')
         for group in self.content[histName].keys():
@@ -1720,6 +1721,8 @@ class Datacard:
         elif major_class == "Threshold2":
             hists_for_binning, fallback = self._getHistAndFallBack(histName,params[2][1])
             major_params = [params[2][1],hists_for_binning, fallback]
+            if len(params[2]) == 3:
+                minor_params.append(params[2][2])
         else:
             major_class = None
             major_params = None
@@ -1735,10 +1738,12 @@ class Datacard:
         elif minor_class == "Threshold2":
             hists_for_binning, fallback = self._getHistAndFallBack(histName,params[4][1])
             minor_params = [params[4][0],hists_for_binning, fallback]
+            if len(params[4]) == 3:
+                minor_params.append(params[4][2])
         else:
             minor_class = None
             minor_params = None
-            
+
         lObj = LinearizeSplit(major        = params[0],
                               major_class  = major_class,
                               major_params = major_params,
@@ -2121,7 +2126,7 @@ class Datacard:
                 os.makedirs(path_pdf)
             logging.info("plotIt command :")
             cmd = f"plotIt -i {path_plotIt} -o {path_pdf} -e {era} {path_yaml}"
-            print (cmd)
+            logging.info(cmd)
             if self.which('plotIt') is not None:
                 logging.info("Calling plotIt")
                 exitCode,output = self.run_command(shlex.split(cmd),return_output=True)
@@ -2987,6 +2992,7 @@ class Datacard:
 
                         nuisance_cmd = f"cd {SETUP_DIR}; "
                         nuisance_cmd += f"env -i bash -c 'source {SETUP_SCRIPT} && cd {SCRIPT_DIR} && python helperInference.py dhi.plots.likelihoods.plot_nuisance_likelihood_scans {path_json} {path_getter}'"
+                        logging.info("Running nuisance likelihood plots")
                         rc,output = self.run_command(nuisance_cmd,shell=True, return_output=True)
                         if rc != 0: 
                             if logging.root.level > 10:
