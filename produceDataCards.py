@@ -2578,12 +2578,13 @@ class Datacard:
                                     combineCmd += f' -d {path_snapshot} --snapshotName "MultiDimFit"'
 
                                         
-                                if 'unblind' in combineCfg.keys() and combineCfg['unblind']:
-                                    if '--toys' in combineCmd or '-t' in combineCmd:
-                                        raise RuntimeError(f'You want to unblind entry {entry} but used `--toys` in the combine command, these are exclusive')
-                                else:
-                                    if not '--toys' in combineCmd and not '-t' in combineCmd:
-                                        combineCmd += " --toys -1"
+                        # Unblind #
+                        if 'unblind' in combineCfg.keys() and combineCfg['unblind']:
+                            if '--toys' in combineCmd or '-t' in combineCmd:
+                                raise RuntimeError(f'You want to unblind entry {entry} but used `--toys` in the combine command, these are exclusive')
+                        else:
+                            if not '--toys' in combineCmd and not '-t' in combineCmd:
+                                combineCmd += " --toys -1"
 
                         # Add the path to workspace #
                         if '-d' not in combineCmd:
