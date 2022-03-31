@@ -429,6 +429,7 @@ class Threshold2(Rebin):
                 - signal : should be np.inf (enforce at least an event in the bin)
                 - main backgrounds : should be sumw2/sumw
                 - other backgrounds : 0
+            min_yield_per_bin : minimum threshold for the bin content, will try to adapt the thresholds in case convergence is not reached with this condition
             keep_non_convergence : keep the bin edges found, even if the number of requested bins is not achieved
 
         """
@@ -786,7 +787,7 @@ class LinearizeSplit(Linearize2D):
             if minor_class == 'Threshold':
                 minor_params[1] = extra_nphs
             if minor_class == 'Threshold2':
-                minor_params = [minor_params[0],minor_params[2]]
+                minor_params = [p for i,p in enumerate(minor_params) if i!=1]
 
         self.neminor = []
         # Loop through all major bins #

@@ -320,6 +320,7 @@ class NumpyHist:
             else:
                 if not isinstance(x_edges,np.ndarray):
                     x_edges = np.array(x_edges)
+                assert x_edges.ndim == 1
             # Get centers of bins #
             centers = (self._e[1:] + self._e[:-1]) / 2
             # Get where centers go in new binning #
@@ -340,12 +341,14 @@ class NumpyHist:
             else:
                 if not isinstance(x_edges,np.ndarray):
                     x_edges = np.array(x_edges)
+                assert x_edges.ndim == 1
                 self.compareRebinAxes(self._e[0],x_edges)
             if y_edges is None:
                 y_edges = np.array([self._e[1][0],self._e[1][-1]])
             else:
                 if not isinstance(y_edges,np.ndarray):
                     y_edges = np.array(y_edges)
+                assert y_edges.ndim == 1
                 self.compareRebinAxes(self._e[1],y_edges)
             # Get centers of bins #
             x_centers = (self._e[0][1:] + self._e[0][:-1]) / 2

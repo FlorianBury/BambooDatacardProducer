@@ -398,7 +398,7 @@ class Scan:
                 elif combineType == 'pulls_impacts':
                     pass
                 else:
-                    raise RuntimeError(f'Combine type {combineType} from mode {combineMode} not understood')
+                    print(f'Combine type {combineType} from mode {combineMode} not understood, will skip')
 
 
     def produceGofValue(self,gofResult):
