@@ -399,6 +399,12 @@ class PostfitPlots:
                 continue # Done in the end 
             # Get non zero bins #
             h = self._getNonZeroHistogram(folder.Get(process))
+            if h is None:
+                logging.warning(f'Process `{process}` empty in folder `{folder.GetTitle()}`')
+                if processCfg['group'] not in self._histograms[cat].keys():
+                    self._histograms[cat][processCfg['group']] = None
+                continue
+                
             if h.GetNbinsX() > n_bins:
                 n_bins = h.GetNbinsX()
             p_max_len = max([len(name) for name in self._processes.keys()]) + 3
@@ -465,6 +471,9 @@ class PostfitPlots:
         for i in range(1,h.GetNbinsX()+1):
             content[i-1] = h.GetBinContent(i)
             error[i-1]   = h.GetBinError(i)
+        # Fully empty histogram #
+        if not np.any(content>0):
+            return None
         # Find the last bin before a continuous range of 0 until end of content
         if content[-1] == 0.:
             cut_idx = np.where(np.diff((content==0.)*1) != 0)[0][-1] + 1
@@ -607,8 +616,8 @@ class PostfitPlots:
                 maxabsr = err
 
         # Custom #
-        minr = - maxabsr * 1.2
-        maxr = + maxabsr * 1.2
+        minr = - abs(maxabsr) * 1.1
+        maxr = + abs(maxabsr) * 1.1
         optx = {}
         opty = {}
         if 'x-axis' in self._plot_options.keys():
@@ -636,15 +645,16 @@ class PostfitPlots:
         for i in range(data.GetN()):
             bin_width = total_hist.GetBinWidth(i+1)
             dividend = total_hist.GetBinContent(i+1) * bin_width
-            # Set point : data - expectation / expectation = data/expectation -1 #
+            # Set point : (data - expectation) / expectation = data/expectation -1 #
             if ys[i] > 0:
                 if dividend > 0:
-                    err.SetPoint(i,total_hist.GetBinCenter(i+1), ys[i] / dividend -1)
+                    err_nom = ys[i] / dividend - 1
                 else:
-                    err.SetPoint(i,total_hist.GetBinCenter(i+1), -1. )
+                    err_nom = -1.
             else:
-                    # Hide it #
-                    err.SetPoint(i,total_hist.GetBinCenter(i+1), -100. )
+                # Hide it #
+                err_nom = -100.
+            err.SetPoint(i,total_hist.GetBinCenter(i+1), err_nom )
 
             # Set point error #
             err_up = data.GetErrorYhigh(i) / dividend
@@ -656,10 +666,10 @@ class PostfitPlots:
             err.SetPointEXlow(i,  0.)
             err.SetPointEXhigh(i, 0.)
             # Check max variation #
-            if err_up > maxabsr:
-                maxabsr = err_up
-            if err_down > maxabsr:
-                maxabsr = err_down
+            if err_up + err_nom > maxabsr:
+                maxabsr = err_up + err_nom
+            if err_down + err_nom > maxabsr:
+                maxabsr = err_down + err_nom
             
         # Esthetics #
         err.SetMarkerColor(1)
