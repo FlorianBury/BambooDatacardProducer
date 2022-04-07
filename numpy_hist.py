@@ -328,6 +328,17 @@ class NumpyHist:
         self._w  = np.divide(self._w,self.widths)
         self._s2 = np.divide(self._s2,self.widths)
 
+    def setUnitaryBinWidth(self):
+        """
+            Make the bin width to unitary    
+        """
+        if self.ndim == 1:
+            self._e = np.arange(self._e.shape[0]) 
+        elif self.ndim == 2:
+            self._e = [np.arange(self._e[0].shape[0]),np.arange(self._e[1].shape[0])]
+        else:
+            raise NotImplementedError
+            
     def split(self,x_edges=None,y_edges=None,axis='x'):
         """
             Split a 2D histogram into a series of smaller 2D histograms 
