@@ -86,6 +86,22 @@ class NumpyHist:
         """ Returns the histogram integral """
         return self._w.sum()
 
+    @property 
+    def widths(self):
+        """ Returns the bin widths in an array following the bin content """
+        if self.ndim == 1:
+            widths = self._e[1:]-self._e[:-1]
+        elif self.ndim == 2:
+            widths = np.dot((self._e[0][1:]-self._e[0][:-1]).reshape(-1,1),
+                            (self._e[1][1:]-self._e[1][:-1]).reshape(1,-1))
+        else:
+            raise NotImplementedError
+        if (widths <= 0.).any():
+            raise RuntimeError(f"Some bins have width <= 0., this might not be wanted : {widths}")
+        return widths
+            
+
+
     #################################################################################################
     #                                       ROOT conversions                                        #
     #################################################################################################
@@ -304,6 +320,14 @@ class NumpyHist:
         s2 = self._s2.sum(axis=0)
         return NumpyHist(e,w,s2,self._name)
 
+    def divideByBinWidth(self):
+        """
+            Divide the bin content and squared errors by the bin width
+            TODO : not sure about the bin error
+        """
+        self._w  = np.divide(self._w,self.widths)
+        self._s2 = np.divide(self._s2,self.widths)
+
     def split(self,x_edges=None,y_edges=None,axis='x'):
         """
             Split a 2D histogram into a series of smaller 2D histograms 
@@ -453,3 +477,6 @@ class NumpyHist:
         return cls(e,w,s2,list_nphs[0].name)
 
 
+if __name__ == '__main__':
+    from IPython import embed
+    embed()
