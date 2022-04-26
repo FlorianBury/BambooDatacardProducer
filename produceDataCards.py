@@ -2359,7 +2359,18 @@ class Datacard:
                 if not os.path.exists(workspacePath):
                     logging.info('Producing workspace')
                     workspaceCmd = f"cd {SETUP_DIR}; "
-                    workspaceCmd += f"env -i bash -c 'source {SETUP_SCRIPT} && {ULIMIT} && cd {subdirBin} && text2workspace.py {combinedTxtPath} -o {workspacePath}'"
+                    text2wpCmd = f"text2workspace.py {combinedTxtPath} -o {workspacePath}"
+                    if 'physics' in combineCfg.keys():
+                        assert 'model' in combineCfg['physics'].keys()
+                        text2wpCmd += f" --physics-model {combineCfg['physics']['model']}"
+                        if 'options' in combineCfg['physics'].keys():
+                            options = combineCfg['physics']['options']
+                            if not isinstance(options,list):
+                                options = [options]
+                            for option in options:
+                                text2wpCmd += f" {option}"
+                    workspaceCmd += f"env -i bash -c 'source {SETUP_SCRIPT} && {ULIMIT} && cd {subdirBin} && {text2wpCmd} '"
+                    logging.debug(f'Running `{workspaceCmd}`')
                     exitCode,output = self.run_command(workspaceCmd,return_output=True,shell=True)
                     if exitCode != 0:
                         if logging.root.level > 10:
