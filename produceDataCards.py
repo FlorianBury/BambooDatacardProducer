@@ -3200,7 +3200,7 @@ class Datacard:
         config.sbatch_time = '0-02:00:00'
         config.sbatch_memPerCPU = '2000'
         config.sbatch_additionalOptions = ["--export=ALL"]
-        config.useJobArray = len(args) > 1 
+        config.useJobArray = True 
         config.inputParamsNames = []
         config.inputParams = []
         config.stageout = True
@@ -3250,13 +3250,14 @@ class Datacard:
                     payload += str(argVal)
             config.inputParams.append([payload])
     
-        # Initialize submission #
-        submitWorker = SubmitWorker(config, submit=False, debug=False, quiet=True)
-
-        # Run creation of bash script #
         f = io.StringIO()
         with redirect_stdout(f): # Catch verbose output
+            # Initialize submission #
+            submitWorker = SubmitWorker(config, submit=False, debug=True, quiet=True)
+
+            # Run creation of bash script #
             submitWorker()
+
         out = f.getvalue()
         # Save verbose output to file #
         with open(os.path.join(config.batchScriptsDir, 'submission_log.txt'),'w') as handle:
