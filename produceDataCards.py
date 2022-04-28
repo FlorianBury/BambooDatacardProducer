@@ -24,7 +24,12 @@ import multiprocessing as mp
 import numpy as np
 from functools import partial
 import enlighten
+from contextlib import redirect_stdout
 import ROOT
+
+from CP3SlurmUtils.Configuration import Configuration
+from CP3SlurmUtils.SubmitWorker import SubmitWorker
+from CP3SlurmUtils.Exceptions import CP3SlurmUtilsException    
 
 from context import TFileOpen
 from yamlLoader import YMLIncludeLoader
@@ -2474,7 +2479,7 @@ class Datacard:
                             if self.custom_args is not None:
                                 args['custom'] = self.custom_args
                             if n_jobs == 1:
-                                subScript = self.writeSbatchCommand(slurmDir,log=True,params=params,args=args)
+                                subScript = self.writeSbatchCommand(slurmDir,params=params,args=args)
                             else:
                                 for idx in idxs:
                                     subsubdir = os.path.join(outputDir,str(idx))
@@ -2484,7 +2489,7 @@ class Datacard:
                                     if binSuffix != '':
                                         jobArgs['combine_args'] += f' bin={binSuffix}'
                                     jobArrayArgs.append(jobArgs)
-                                subScript = self.writeSbatchCommand(slurmDir,log=True,params=params,args=jobArrayArgs)
+                                subScript = self.writeSbatchCommand(slurmDir,params=params,args=jobArrayArgs)
                         else:
                             logging.info(f'{entry}: found batch script, will look for unfinished jobs')
                             if n_jobs > 1:
@@ -2609,7 +2614,15 @@ class Datacard:
 
                     if combineCmd != '':
                         fullCombineCmd  = f"cd {SETUP_DIR}; "
-                        fullCombineCmd += f"env -i bash -c 'source {SETUP_SCRIPT} && {ULIMIT} && cd {subdirBin} && {combineCmd}'"
+                        #fullCombineCmd += f"env -i bash -c 'source {SETUP_SCRIPT} && {ULIMIT} && cd {subdirBin} && {combineCmd}'"
+                        fullCombineCmd += f"env -i bash -c 'source {SETUP_SCRIPT} && {ULIMIT} "
+                        if 'scratch' in str(subprocess.check_output('echo $LOCALSCRATCH',shell=True)) and self.worker: 
+                            # If running on computing node, leave the script running on scratch area, CP3SlurmUtils will make sure to transfer
+                            fullCombineCmd += f" && cd {os.getcwd()} "
+                        else:
+                            # Else, go work at correct output place
+                            fullCombineCmd += f" && cd {subdirBin} "
+                        fullCombineCmd += f" && {combineCmd}'"
 
                         logging.info('Extensive command is below')
                         logging.info(fullCombineCmd)
@@ -3174,82 +3187,82 @@ class Datacard:
         return rc == 0
 
     @staticmethod
-    def writeSbatchCommand(mainDir,log=False,params={},args={}):
-        # Generate file path #
-        filepath = os.path.join(mainDir,f'slurmSubmission.sh')
-        scriptName = os.path.abspath(__file__)
-        if log:
-            log_dir = os.path.join(mainDir,'logs')
-        else:
-            log_dir = mainDir
-        if not os.path.exists(mainDir):
-            raise RuntimeError(f'Directory {mainDir} does not exist')
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-
-        # Check job type (array or not) #
-        if isinstance(args,list): # Array submission
-            for arg in args:
-                if not isinstance(arg,dict):
-                    raise RuntimeError('Arguments need to be a dict : '+arg.__repr__())
-            N_arrays = len(args)
-        elif isinstance(args,dict): # single job submission
-            N_arrays = 0
+    def writeSbatchCommand(mainDir,params={},args={}):
+        # Make arguments easier to handle #
+        if isinstance(args,dict):
             args = [args]
-        else:
-            raise RuntimeError('Either a dict or a list needs to be used for args')
+        # Make default slurm config #
+        config = Configuration()
+        config.scratchDir = "${LOCALSCRATCH}"
+        config.sbatch_partition = 'cp3'
+        config.sbatch_qos = 'cp3'
+        config.sbatch_chdir = os.path.dirname(os.path.abspath(__file__))
+        config.sbatch_time = '0-02:00:00'
+        config.sbatch_memPerCPU = '2000'
+        config.sbatch_additionalOptions = ["--export=ALL"]
+        config.useJobArray = len(args) > 1 
+        config.inputParamsNames = []
+        config.inputParams = []
+        config.stageout = True
+        config.stageoutFiles = ["*root","*out"]
+        #config.writeLogsOnWN = False
 
-        # Write to file 
-        with open(filepath,'w') as handle:
-            # Write header #
-            handle.write('#!/bin/bash\n\n')
-            if N_arrays > 0:
-                handle.write('#SBATCH --job-name=datacard_%a\n')
-                handle.write(f'#SBATCH --output={os.path.join(log_dir,"log-%A_%a.out")}\n')
-                handle.write(f'#SBATCH --array=1-{N_arrays}\n')
+        # Make paths #
+        config.inputSandboxDir       = mainDir
+        config.batchScriptsDir       = os.path.join(mainDir,'scripts')
+        config.stageoutDir           = os.path.join(mainDir,'output')
+        config.stageoutLogsDir       = os.path.join(mainDir, 'logs')   
+        config.batchScriptsFilename  = 'slurmSubmission.sh'
+
+        # Edit slurm parameters #
+        for k,v in params.items():
+            if 'time' in k:
+                config.sbatch_time = str(v)
+            elif 'mem' in k:
+                config.sbatch_memPerCPU = str(v)
             else:
-                handle.write('#SBATCH --job-name=datacard\n')
-                handle.write(f'#SBATCH --output={os.path.join(log_dir,"log-%j.out")}\n')
-            for key,val in params.items():
-                handle.write(f'#SBATCH --{key}={val}\n')
-            handle.write('\n')
-            handle.write('\n')
-                
-            # command #
-            if N_arrays > 0:
-                handle.write('cmds=(\n')
-            for arg in args:
-                if N_arrays > 0:
-                    handle.write('"')
-                handle.write(f'python3 {scriptName} ')
-                if logging.root.level == 10:
-                    handle.write(' -v ')
-                for key,val in arg.items():
-                    if val is None:
-                        continue
-                    elif isinstance(val,bool) and not val:
-                        continue
-                    elif isinstance(val,str) and os.path.exists(val):
-                        val = os.path.abspath(val)
-                    handle.write(f'--{key} ')
-                    if isinstance(val,list) or isinstance(val,tuple):
-                        for v in val:
-                            if isinstance(v,str) and os.path.exists(v):
-                                v = os.path.abspath(v)
-                            handle.write(f'{v} ')
-                    elif isinstance(val,bool):
-                        pass
-                    else:
-                        handle.write(f'{val} ')
-                if N_arrays > 0:
-                    handle.write('"')
-                handle.write('\n')
-            if N_arrays > 0:
-                handle.write(')\n')
-                handle.write('${cmds[$SLURM_ARRAY_TASK_ID-1]}\n')
+                config.sbatch_additionalOptions.append(f'--{k}={v}')
+            
+        # Make payload and parameters #
+        config.inputParamsNames = ['payload']
 
-        logging.info(f'Generated submission script {filepath}')
-        return filepath
+        scriptName = os.path.abspath(__file__).replace('/auto','')
+        config.payload = "${payload}"
+
+        for arg in args:
+            payload = f"python3 {scriptName}" 
+            for argName,argVal in arg.items():
+                if argVal is None:
+                    continue
+                elif isinstance(argVal,bool) and not argVal:
+                    continue
+                elif isinstance(argVal,str) and os.path.exists(argVal):
+                    argVal = os.path.abspath(argVal)
+                payload += f" --{argName} "
+                if isinstance(argVal,list) or isinstance(argVal,tuple):
+                    for v in argVal:
+                        if isinstance(v,str) and os.path.exists(v):
+                            v = os.path.abspath(v).replace('/auto','')
+                        payload += f'{v} '
+                elif isinstance(argVal,bool):
+                    pass
+                else:
+                    payload += str(argVal)
+            config.inputParams.append([payload])
+    
+        # Initialize submission #
+        submitWorker = SubmitWorker(config, submit=False, debug=False, quiet=True)
+
+        # Run creation of bash script #
+        f = io.StringIO()
+        with redirect_stdout(f): # Catch verbose output
+            submitWorker()
+        out = f.getvalue()
+        # Save verbose output to file #
+        with open(os.path.join(config.batchScriptsDir, 'submission_log.txt'),'w') as handle:
+            handle.write(out)
+
+        return os.path.join(config.batchScriptsDir, config.batchScriptsFilename)
 
  
     @staticmethod
@@ -3377,7 +3390,7 @@ if __name__=="__main__":
     # Content checks #
     required_items = ['path','outputDir','yamlName','histConverter','groups','era']
     if any(item not in configMain.keys() for item in required_items): 
-        raise RuntimeError('Your configMain is missing the following items :'+ \
+        raise RuntimeError('Your configMain is missing the following items : '+ \
                 ','.join([item for item in required_items if item not in configMain.keys()]))
 
     # Create output directory #
@@ -3766,7 +3779,7 @@ if __name__=="__main__":
             slurmScript = os.path.join(outputDir,'slurmSubmission.sh')
             new_script = False
             if not os.path.exists(slurmScript):
-                slurmScript = Datacard.writeSbatchCommand(outputDir,params=paramsToSubmit,args=argsToSubmit,log=True)
+                slurmScript = Datacard.writeSbatchCommand(outputDir,params=paramsToSubmit,args=argsToSubmit)
                 new_script = True
 
             #Submit #
