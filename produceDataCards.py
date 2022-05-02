@@ -98,9 +98,9 @@ class Datacard:
 
 
         # Add logging output to log file #
-        handler = logging.FileHandler(os.path.join(self.outputDir,logName),mode='w')
-        logger = logging.getLogger()
-        logger.addHandler(handler)
+        #handler = logging.FileHandler(os.path.join(self.outputDir,logName),mode='w')
+        #logger = logging.getLogger()
+        #logger.addHandler(handler)
 
 
     def initialize(self):
@@ -842,7 +842,7 @@ class Datacard:
         len_groups = max([len(group) for group in self.groups.keys()]+[1])
 
         def printout(group,y_before,y_after):
-            diff = abs(y_after[0]-y_before[0])/y_before[0]*100 if y_before[0] != 0 else 0.
+            diff = (y_after[0]-y_before[0])/y_before[0]*100 if y_before[0] != 0 else 0.
             string = f'{group:{len_groups+3}s} : yield (before operations) = {y_before[0]:12.3f} +/- {y_before[1]:10.3f} -> yield (after) = {y_after[0]:12.3f} +/- {y_after[1]:10.3f} [{diff:+5.2f}%]'
             logging.info(f'    {string}')
             return len(string)
@@ -1136,8 +1136,8 @@ class Datacard:
                 raise RuntimeError(f'File {lib} does not exist')
             spec = importlib.util.spec_from_file_location(clsName,lib)
             mod = spec.loader.load_module()
-            cls = getattr(mod, clsName, None)(**corrConfig['init'])
             logging.info(f"Applying {corrConfig['module']}")
+            cls = getattr(mod, clsName, None)(**corrConfig['init'])
             # Loop over categories #
             for cat in self.content.keys():
                 cat_no_era = cat.replace(f'_{self.era}','')
@@ -2426,6 +2426,7 @@ class Datacard:
                         slurmDir  = os.path.join(subdirBin,'batch')
                         logDir    = os.path.join(slurmDir,'logs')
                         outputDir = os.path.join(slurmDir,'output')
+                        scriptDir = os.path.join(slurmDir,'scripts')
                         for directory in [slurmDir,logDir,outputDir]:
                             if not os.path.exists(directory):
                                 os.makedirs(directory)
@@ -2450,7 +2451,7 @@ class Datacard:
                                             logging.debug(f'Tree limit in {f} has {tree.GetEntries()} entries instead of {toys}')
                                             valid = False
                                 return valid
-                        if combineMode == 'pulls_impacts':
+                        elif combineMode == 'pulls_impacts':
                             n_jobs = len(systNames) + 1 # 1 = initial fit, >1: all the systematics
                             idxs = [_ for _ in range(1,n_jobs+1)]
                             if 'use_snapshot' in combineCfg.keys() and combineCfg['use_snapshot']:
@@ -2467,8 +2468,13 @@ class Datacard:
                                             logging.debug(f'Tree limit in {f} has {tree.GetEntries()} entries instead of 3')
                                             valid = False
                                 return valid
+                        else:
+                            n_jobs = 1
+                            idxs = [1]
+                            def fileChecker(f,idx):
+                                return True
 
-                        subScript = os.path.join(slurmDir,'slurmSubmission.sh')
+                        subScript = os.path.join(scriptDir,'slurmSubmission.sh')
 
                         if not os.path.exists(subScript):
                             logging.info(f'{entry} : submitting {n_jobs} jobs')
@@ -2479,7 +2485,7 @@ class Datacard:
                             if self.custom_args is not None:
                                 args['custom'] = self.custom_args
                             if n_jobs == 1:
-                                subScript = self.writeSbatchCommand(slurmDir,params=params,args=args)
+                                subScript = self.writeSbatchCommand(slurmDir,params=params,args=args,stageoutFiles=["*root","*out"])
                             else:
                                 for idx in idxs:
                                     subsubdir = os.path.join(outputDir,str(idx))
@@ -2489,21 +2495,23 @@ class Datacard:
                                     if binSuffix != '':
                                         jobArgs['combine_args'] += f' bin={binSuffix}'
                                     jobArrayArgs.append(jobArgs)
-                                subScript = self.writeSbatchCommand(slurmDir,params=params,args=jobArrayArgs)
+                                subScript = self.writeSbatchCommand(slurmDir,params=params,args=jobArrayArgs,stageoutFiles=["*root","*out"])
                         else:
                             logging.info(f'{entry}: found batch script, will look for unfinished jobs')
-                            if n_jobs > 1:
-                                arrayIds = []
-                                for idx in idxs:
+                            arrayIds = []
+                            for idx in idxs:
+                                if n_jobs > 1:
                                     subsubdir = os.path.join(outputDir,str(idx))
-                                    rootfile = glob.glob(os.path.join(subsubdir,'higgs*.root')) 
-                                    if len(rootfile) == 0:
-                                        logging.debug(f'Root output not found in {subsubdir}')
+                                else:
+                                    subsubdir = outputDir
+                                rootfile = glob.glob(os.path.join(subsubdir,'higgs*.root')) 
+                                if len(rootfile) == 0:
+                                    logging.debug(f'Root output not found in {subsubdir}')
+                                    arrayIds.append(str(idx))
+                                else:
+                                    if not fileChecker(rootfile[0],idx):
+                                        #os.remove(rootfile[0])
                                         arrayIds.append(str(idx))
-                                    else:
-                                        if not fileChecker(rootfile[0],idx):
-                                            #os.remove(rootfile[0])
-                                            arrayIds.append(str(idx))
                         if arrayIds is None:
                             slurmCmd = f'sbatch {subScript}'
                         else:
@@ -3187,7 +3195,7 @@ class Datacard:
         return rc == 0
 
     @staticmethod
-    def writeSbatchCommand(mainDir,params={},args={}):
+    def writeSbatchCommand(mainDir,params={},args={},stageoutFiles=[],output_in_main=False):
         # Make arguments easier to handle #
         if isinstance(args,dict):
             args = [args]
@@ -3197,6 +3205,7 @@ class Datacard:
         config.sbatch_partition = 'cp3'
         config.sbatch_qos = 'cp3'
         config.sbatch_chdir = os.path.dirname(os.path.abspath(__file__))
+        config.inputSandboxContent = ["*.h"]
         config.sbatch_time = '0-02:00:00'
         config.sbatch_memPerCPU = '2000'
         config.sbatch_additionalOptions = ["--export=ALL"]
@@ -3204,13 +3213,18 @@ class Datacard:
         config.inputParamsNames = []
         config.inputParams = []
         config.stageout = True
-        config.stageoutFiles = ["*root","*out"]
+        config.stageoutFiles = stageoutFiles
         #config.writeLogsOnWN = False
 
         # Make paths #
-        config.inputSandboxDir       = mainDir
-        config.batchScriptsDir       = os.path.join(mainDir,'scripts')
-        config.stageoutDir           = os.path.join(mainDir,'output')
+        config.inputSandboxDir = mainDir
+        config.batchScriptsDir = os.path.join(mainDir,'scripts')
+        if output_in_main:
+            config.stageoutDir = mainDir
+        elif len(args) > 1:
+            config.stageoutDir = os.path.join(mainDir,'output','${SLURM_ARRAY_TASK_ID}')
+        else:
+            config.stageoutDir = os.path.join(mainDir,'output')
         config.stageoutLogsDir       = os.path.join(mainDir, 'logs')   
         config.batchScriptsFilename  = 'slurmSubmission.sh'
 
@@ -3780,7 +3794,7 @@ if __name__=="__main__":
             slurmScript = os.path.join(outputDir,'slurmSubmission.sh')
             new_script = False
             if not os.path.exists(slurmScript):
-                slurmScript = Datacard.writeSbatchCommand(outputDir,params=paramsToSubmit,args=argsToSubmit)
+                slurmScript = Datacard.writeSbatchCommand(outputDir,params=paramsToSubmit,args=argsToSubmit,output_in_main=True)
                 new_script = True
 
             #Submit #
