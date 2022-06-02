@@ -9,6 +9,7 @@ import copy
 import ctypes
 import shlex
 import yaml
+import parse
 import random
 import shutil
 import string
@@ -36,6 +37,7 @@ from yamlLoader import YMLIncludeLoader
 from interpolation import InterpolateContent
 from postfits import PostfitPlots
 from txtwriter import Writer
+from numpy_hist import NumpyHist
 
 from IPython import embed
 
@@ -65,7 +67,7 @@ COMBINE_DEFAULT_ARGS = [
 
 
 class Datacard:
-    def __init__(self,outputDir=None,configPath=None,path=None,yamlName=None,worker=None,groups=None,shapeSyst=None,normSyst=None,histConverter=None,era=None,use_syst=False,include_overflow=False,root_subdir=None,histCorrections=None,pseudodata=False,rebin=None,histEdit=None,textfiles=None,plotIt=None,combineConfigs=None,logName=None,custom_args=None,save_datacard=True,**kwargs):
+    def __init__(self,outputDir=None,configPath=None,path=None,yamlName=None,worker=None,groups=None,shapeSyst=None,normSyst=None,histConverter=None,era=None,use_syst=False,include_overflow=False,root_subdir=None,histCorrections=None,pseudodata=False,rebin=None,histEdit=None,histCut=None,textfiles=None,plotIt=None,combineConfigs=None,logName=None,custom_args=None,save_datacard=True,**kwargs):
         self.outputDir          = outputDir
         self.configPath         = configPath
         self.path               = path
@@ -82,6 +84,7 @@ class Datacard:
         self.shapeSyst          = shapeSyst
         self.rebin              = rebin
         self.histEdit           = histEdit
+        self.histCut            = histCut
         self.textfiles          = textfiles
         self.plotIt             = plotIt
         self.combineConfigs     = combineConfigs
@@ -212,6 +215,8 @@ class Datacard:
             self.applyCorrections(True)
         if self.histEdit is not None:
             self.applyEditing()
+        if self.histCut is not None:
+            self.applyCut()
         if self.rebin is not None:
             self.applyRebinning()
         self.yieldPrintout()
@@ -1285,8 +1290,10 @@ class Datacard:
 
         # Apply editing schemes #
         for histName in self.content.keys():
+            # Remove era #
+            cat = histName.replace(f'_{self.era}','')
             # Check name and type #
-            if histName not in self.histEdit.keys():
+            if cat not in self.histEdit.keys():
                 continue
             histType = self.content[histName][list(self.groups.keys())[0]]['nominal'].__class__.__name__ 
             if histType.startswith('TH1'):
@@ -1300,7 +1307,7 @@ class Datacard:
             
             # Get the functions with partial #
             editFuncs = []
-            for iedit,editCfg in enumerate(self.histEdit[histName]):
+            for iedit,editCfg in enumerate(self.histEdit[cat]):
                 if 'val' not in editCfg.keys():
                     logging.warning(f'Histogram editing for {histName} is missing the `val` key, will assume 0.')
                     editCfg['val'] = 0.
@@ -1321,7 +1328,7 @@ class Datacard:
                         editFunc(hist)
                     if systName == 'nominal':
                         newInt = hist.Integral()
-                logging.info(f'... group {group:20s} : Integral = {oldInt:9.3f} -> {newInt:9.3f} [{(oldInt-newInt)/(oldInt+1e-9)*100:5.2f}%]')
+                logging.info(f'... group {group:30s} : Integral = {oldInt:9.3f} -> {newInt:9.3f} [{(oldInt-newInt)/(oldInt+1e-9)*100:5.2f}%]')
 
     def editTH1(self,h,val,x=None,i=None):
         assert (x is not None and i is None) or (x is None and i is not None)
@@ -1362,6 +1369,72 @@ class Datacard:
         assert isinstance(bins,list)
         for b in bins:
             h.SetBinContent(b,val)
+
+    def applyCut(self):
+        logging.info('Applying cut')
+        self.checkForMissingNominals()
+
+        # Apply editing schemes #
+        for histName in self.content.keys():
+            # Remove era #
+            cat = histName.replace(f'_{self.era}','')
+            # Check name and type #
+            if cat not in self.histCut.keys():
+                continue
+            histType = self.content[histName][list(self.groups.keys())[0]]['nominal'].__class__.__name__ 
+            if histType.startswith('TH1'):
+                axes = ['x']
+            elif histType.startswith('TH2'):
+                axes = ['x','y']
+            else:   
+                raise RuntimeError(f'Histogram {histName} type not understood : {histType}')
+
+            # Loop through cut configs #
+            logging.info(f'Cutting histogram {histName}')
+            required_args = set(['axis','direction','value'])
+            for icut,cutCfg in enumerate(self.histCut[cat]):
+                # Safety checks #
+                if len(set(cutCfg.keys()).intersection(required_args)) != len(required_args):
+                    raise RuntimeError(f'Required args are {required_args}, you provided {cutCfg.keys()}')
+                if cutCfg['axis'] not in axes:
+                    raise RuntimeError(f"You provided axis {cutCfg['axis']}, but available values are {axes}")
+                if cutCfg['direction'] not in ['>','<','<=','>=']:
+                    raise RuntimeError(f"You provided diection {cutCfg['direction']}, but available values are [>,<,<=,>=]")
+
+                # Loop through histograms #
+                for group in self.content[histName].keys():
+                    oldInt = self.content[histName][group]['nominal'].Integral()
+                    for systName,h in self.content[histName][group].items():
+                        self.content[histName][group][systName] = self.cutHistogram(h,**cutCfg)
+                    newInt = self.content[histName][group]['nominal'].Integral()
+                    logging.info(f'... group {group:30s} : Integral = {oldInt:9.3f} -> {newInt:9.3f} [{(oldInt-newInt)/(oldInt+1e-9)*100:5.2f}%]')
+
+    @staticmethod
+    def cutHistogram(h,axis,direction,value):
+        # Get histogram content #
+        nph = NumpyHist.getFromRoot(h)
+        # Checks #
+        if value < nph.e.min() or value > nph.e.max():
+            logging.error(f"Cut at {value} on axis {axis} is outside the axis range [{nph.e.min()},{nph.e.max()}], will not do anything")
+            return h
+        # Find edge #
+        idx_closest_edge = np.argmin(abs(value-nph.e))
+        if direction == '>':
+            idx_closest_edge += 1
+        if direction == '<':
+            idx_closest_edge -= 1
+        # Split #
+        if axis == 'x':
+            split_nphs = nph.split(x_edges=[nph.e[idx_closest_edge]])
+        if axis == 'y':
+            split_nphs = nph.split(y_edges=[nph.e[idx_closest_edge]])
+        # Get correct histogram #
+        if '>' in direction:
+            new_nph = split_nphs[1]
+        if '<' in direction:
+            new_nph = split_nphs[0]
+        # return ROOT histogram #
+        return new_nph.fillHistogram(h.GetName()+'cut')
 
     def applyRebinning(self):
         assert self.rebin is not None
@@ -2204,30 +2277,39 @@ class Datacard:
 
             # Additional datacards from extern #
             if 'extern' in combineCfg.keys():
-                def moveFileToOutput(initialFiles,outputDir):
-                    if isinstance(initialFiles,dict):
-                        outputFiles = {}
-                        for key,values in initialFiles.items():
-                            outputFiles[str(key)] = moveFileToOutput(values,outputDir)
-                    elif isinstance(initialFiles, list):
-                        outputFiles = []
-                        for item in initialFiles:
-                            outputFiles.extend(moveFileToOutput(item,outputDir))
-                    elif isinstance(initialFiles, str):
-                        interFiles = glob.glob(initialFiles)
-                        outputFiles = []
-                        for initf in interFiles:
-                            finalf = os.path.join(outputDir,os.path.basename(initf))
-                            if not os.path.exists(finalf):
-                                logging.info(f'Moving {initf}')
-                                shutil.copyfile(initf,finalf)
-                            outputFiles.append(finalf)
-                    else:
-                        raise RuntimeError(f'Type {type(initialFiles)} not understood')
-                    return outputFiles
-                                           
-                externTxtFiles = moveFileToOutput(combineCfg['extern']['txtFiles'],self.outputDir)
-                externRootFiles = moveFileToOutput(combineCfg['extern']['rootFiles'],self.outputDir)
+                externDir = os.path.join(self.outputDir,'extern')
+                if not os.path.exists(externDir):
+                    os.makedirs(externDir)
+                if isinstance(combineCfg['extern']['txtFiles'],dict):
+                    externTxtFiles = {}
+                    for key,value in combineCfg['extern']['txtFiles'].items():
+                        if isinstance(value,str):
+                            externTxtFiles[key] = [self.bundleCards(txtFile=value,output=externDir)]
+                        elif isinstance(value,list):
+                            externTxtFiles[key] = [self.bundleCards(txtFile=val,output=externDir) for val in value]
+                elif isinstance(combineCfg['extern']['txtFiles'],list):
+                    externTxtFiles = [self.bundleCards(txtFile=item,output=externDir) for item in combineCfg['extern']['txtFiles']]
+                elif isinstance(combineCfg['extern']['txtFiles'],str):
+                    externTxtFiles = [self.bundleCards(txtFile=combineCfg['extern']['txtFiles'],output=externDir)]
+                else:
+                    raise RuntimeError(f"Format of `extern` txtFiles {type(combineCfg['extern']['txtFiles'])} not understood")
+
+                if 'split' in combineCfg['extern'].keys():
+                    if isinstance(externTxtFiles,dict):
+                        for era, txtFiles in externTxtFiles.items(): 
+                            for txtFile in txtFiles:
+                                cardPaths = self.splitCards(txtFile,suffix=combineCfg['extern']['split']['suffix'],era=era)
+                                for binName,cardPath in cardPaths.items():
+                                    newName = f"{combineCfg['extern']['split']['bins'][binName]}_{era}"
+                                    cardPath = self.renameBin(txtFile=cardPath,oldBinName=binName,newBinName=newName)
+                                    cardPath = self.bundleCards(txtFile=cardPath,output=self.outputDir)
+                                    txtPaths[newName] = cardPath
+                    if isinstance(externTxtFiles,list):
+                        for txtFiles in externTxtFiles:
+                            cardPaths = self.splitCards(txtFile,suffix=combineCfg['extern']['split']['suffix'])
+                            for binName,cardPath in cardPaths.items():
+                                binName = combineCfg['extern']['split']['bins'][binName]
+                                txtPaths[binName] = self.bundleCards(txtFile=cardPath,output=self.outputDir)
 
             # Select bins #
             binsToUse = []
@@ -2250,9 +2332,9 @@ class Datacard:
                         categories.extend([[b] for b in combineCfg['bins']])
                 else:
                     categories = combineCfg['bins']
-                if 'extern' in combineCfg.keys() and len(categories) == 0:
-                    # Full extern run
-                    categories = [[]]
+                #if 'extern' in combineCfg.keys() and len(categories) == 0:
+                #    # Full extern run
+                #    categories = [[]]
                 if len(self.era) > 1:
                     eras = []
                     externs = []
@@ -2274,11 +2356,11 @@ class Datacard:
                     if len(cat) > 0:
                         bins = [f'{c}_{e}' for c in cat for e in era]
                     # Add extern #
-                    if 'extern' in combineCfg.keys():
-                        if isinstance(externTxtFiles,dict):
-                            bins.extend([f for e in era for f in externTxtFiles[e]])
-                        else:
-                            bins.extend(externTxtFiles)
+                    #if 'extern' in combineCfg.keys():
+                    #    if isinstance(externTxtFiles,dict):
+                    #        bins.extend([f for e in era for f in externTxtFiles[e]])
+                    #    else:
+                    #        bins.extend(externTxtFiles)
                     binsToUse.append(bins)
             else:
                 binsToUse.append('all')
@@ -2478,14 +2560,23 @@ class Datacard:
 
                         if not os.path.exists(subScript):
                             logging.info(f'{entry} : submitting {n_jobs} jobs')
+                            # Base args #
                             jobArrayArgs = []
                             args['worker'] = ''
                             args['yaml'] = self.configPath
                             args['era'] = self.era
+                            # Mode args #
+                            kwargs = {}
+                            if combineMode == 'pulls_impacts':
+                                kwargs['output_starts_at_zero'] = True
+                            # Custom args #
                             if self.custom_args is not None:
                                 args['custom'] = self.custom_args
+                            # Single or multiple jobs bash script creation #
                             if n_jobs == 1:
-                                subScript = self.writeSbatchCommand(slurmDir,params=params,args=args,stageoutFiles=["*root","*out"])
+                                if binSuffix != '':
+                                    args['combine_args'] = f'bin={binSuffix}'
+                                subScript = self.writeSbatchScript(slurmDir,params=params,args=args,stageoutFiles=["*root","*out"],**kwargs)
                             else:
                                 for idx in idxs:
                                     subsubdir = os.path.join(outputDir,str(idx))
@@ -2495,7 +2586,7 @@ class Datacard:
                                     if binSuffix != '':
                                         jobArgs['combine_args'] += f' bin={binSuffix}'
                                     jobArrayArgs.append(jobArgs)
-                                subScript = self.writeSbatchCommand(slurmDir,params=params,args=jobArrayArgs,stageoutFiles=["*root","*out"])
+                                subScript = self.writeSbatchScript(slurmDir,params=params,args=jobArrayArgs,stageoutFiles=["*root","*out"],**kwargs)
                         else:
                             logging.info(f'{entry}: found batch script, will look for unfinished jobs')
                             arrayIds = []
@@ -2579,7 +2670,7 @@ class Datacard:
                                 if 'use_snapshot' in combineCfg.keys() and combineCfg['use_snapshot'] and int(additional_args['idx']) > 0:
                                     # Find snapshot, or wait #
                                     attempts = 0
-                                    while attempts < 120: # wait until 60 min then fails
+                                    while attempts < 60: # wait until 30 min then fails
                                         path_snapshot = glob.glob(os.path.join(os.path.dirname(subdirBin),'0','*MultiDimFit*root'))
                                         if len(path_snapshot) > 0:
                                             path_snapshot = path_snapshot[0]
@@ -2593,7 +2684,7 @@ class Datacard:
                                             if found_workspace: 
                                                 break
                                         time.sleep(30) # Wait 30 seconds to see if first job has succeeded 
-                                        logging.info(f'Attempt {attempts} failed to find the snapshot with the workspace, will wait another 30s')
+                                        logging.info(f'Attempt {attempts} failed to find the snapshot in {os.path.join(os.path.dirname(subdirBin),"0")} with the workspace, will wait another 30s')
                                         attempts += 1
 
                                     if isinstance(path_snapshot,list) or not os.path.exists(path_snapshot):
@@ -2622,7 +2713,6 @@ class Datacard:
 
                     if combineCmd != '':
                         fullCombineCmd  = f"cd {SETUP_DIR}; "
-                        #fullCombineCmd += f"env -i bash -c 'source {SETUP_SCRIPT} && {ULIMIT} && cd {subdirBin} && {combineCmd}'"
                         fullCombineCmd += f"env -i bash -c 'source {SETUP_SCRIPT} && {ULIMIT} "
                         if 'scratch' in str(subprocess.check_output('echo $LOCALSCRATCH',shell=True)) and self.worker: 
                             # If running on computing node, leave the script running on scratch area, CP3SlurmUtils will make sure to transfer
@@ -2794,7 +2884,8 @@ class Datacard:
                     if hadd_data:
                         rootfile = glob.glob(os.path.join(subdirBin,'batch','output','1','*root'))
                         if len(rootfile) != 1:
-                            raise RuntimeError(f'Cannot find file {rootfile.__repr__()}')
+                            logging.error(f'Cannot find file {rootfile.__repr__()}')
+                            continue
                         shutil.copy(rootfile[0],data_file)
                         logging.debug(f'Created {data_file}')
                         limit_data = getLimitValues(data_file)
@@ -2905,7 +2996,7 @@ class Datacard:
 
                 # Producing prefit and postfit plots #
                 if 'prefit' in combineMode or 'postfit' in combineMode:
-                    fitdiagFile = glob.glob(os.path.join(subdirBin,'fitDiagnostic*root'))
+                    fitdiagFile = glob.glob(os.path.join(subdirBin,'batch','output','fitDiagnostic*root'))
                     if len(fitdiagFile) == 0:
                         raise RuntimeError("Could not find any fitdiag file in subdir")
                     fitdiagFile = fitdiagFile[0].replace('/auto','') 
@@ -3009,6 +3100,7 @@ class Datacard:
                             'workspace'             : resultFile[0],
                             'dataset'               : resultFile[0],
                             'fit_diagnostics_path'  : fitdiagFile,
+                            'show_derivatives'      : True,
                             'y_min'                 : 0.,
                             'y_max'                 : 5.,
                         }
@@ -3169,7 +3261,6 @@ class Datacard:
 
         return initTextFiles
 
-        
     def combineCards(self,initTextPaths,outputTextPath):
         for initTextPath in initTextPaths:
             if not os.path.exists(initTextPath):
@@ -3186,6 +3277,7 @@ class Datacard:
                 # we use relative path so it can be later exported to other filesystem
         fullCombineCmd  = f"cd {SETUP_DIR}; "
         fullCombineCmd += f"env -i bash -c 'source {SETUP_SCRIPT} && cd {os.path.dirname(outputTextPath)} && {combineCmd}'"
+        logging.debug(f'Running command `{fullCombineCmd}`')
         rc, output = self.run_command(fullCombineCmd,return_output=True,shell=True)
         if rc != 0:
             logging.error(f'combineCards failed with {outputTextPath}')
@@ -3194,8 +3286,101 @@ class Datacard:
                 handle.write(line)
         return rc == 0
 
+    def bundleCards(self,txtFile,output,**kwargs):
+        if not os.path.exists(txtFile):
+            raise RuntimeError(f'File {txtFile} not found')
+        basename = os.path.basename(txtFile)
+        if os.path.exists(os.path.join(output,basename)):
+            logging.info(f'\t{basename} is already bundled into {output}')
+            return os.path.join(output,basename)
+        bundleCmd = f"bundle_datacard.py {txtFile} {output}"
+        for argName,argVal in kwargs.items():
+            bundleCmd += f' --{argName}={argVal}'
+        fullCombineCmd  = f"cd {SETUP_DIR}; "
+        fullCombineCmd += f"env -i bash -c 'source {SETUP_SCRIPT} && {bundleCmd}'"
+        logging.debug(f'Running command `{fullCombineCmd}`')
+        logging.info(f'\tBundling card {basename} into {output}')
+        rc, output = self.run_command(fullCombineCmd,return_output=True,shell=True)
+        if rc != 0:
+            logging.error(f'bundle_datacard.py failed, log below')
+        for line in output:
+            if rc != 0:
+                logging.info(line.strip())
+            if 'bundled datacard' in line:
+                return line.split()[-1] 
+
+    def splitCards(self,txtFile,suffix,era=None,**kwargs):
+        if not os.path.exists(txtFile):
+            raise RuntimeError(f'File {txtFile} not found')
+        basename = os.path.basename(txtFile)
+        dirname = os.path.dirname(txtFile)
+        # Make pattern #
+        if era is None:
+            pattern = f'{suffix}_{{}}.txt'
+            cardPaths = glob.glob(os.path.join(dirname,f'{suffix}*txt'))
+        else:
+            pattern = f'{suffix}_{{}}_{era}.txt'
+            cardPaths = glob.glob(os.path.join(dirname,f'{suffix}*{era}*txt'))
+        # Get number of split files in directory and expected from txt file #
+        N_bins = 0
+        with open(txtFile,'r') as handle:
+            for line in handle:
+                if line.startswith('imax'):
+                    N_bins = int(line.split()[1])
+                    break
+        if N_bins <= 0:
+            raise RuntimeError(f'N bins = {N_bins} <= 0 in file {txtFile}')
+        # If all split files already there -> get their names #
+        if len(cardPaths) == N_bins:
+            logging.info(f'\t{txtFile} is already split')
+        # If not -> run the splitting #
+        else:
+            # Do the splitting #
+            splitCmd = f"split_datacard_by_bins.py {os.path.basename(txtFile)} --pattern {pattern}"
+            for argName,argVal in kwargs.items():
+                splitCmd += f' --{argName}={argVal}'
+            fullCombineCmd  = f"cd {SETUP_DIR}; "
+            fullCombineCmd += f"env -i bash -c 'source {SETUP_SCRIPT} && cd {dirname} && {splitCmd}'"
+            logging.debug(f'Running command `{fullCombineCmd}`')
+            logging.info(f'\tSplitting card {basename}')
+            rc, output = self.run_command(fullCombineCmd,return_output=True,shell=True)
+            if rc != 0:
+                logging.error(f'split_datacard_by_bins.py failed, log below')
+            cardPaths = []
+            for line in output:
+                if rc != 0:
+                    logging.info(line.strip())
+                if 'split_datacard_by_bins - removing all bins' in line:
+                    cardPaths.append(line.split()[-1])
+        # Recover card paths #
+        return {parse.parse(pattern,os.path.basename(cardPath))[0]:cardPath for cardPath in cardPaths}
+                
+
+    def renameBin(self,txtFile,oldBinName,newBinName):
+        # Change file name #
+        newFile = os.path.join(os.path.dirname(txtFile),f'{newBinName}.txt')
+        if os.path.exists(newFile):
+            logging.info(f'\tRenamed card {newFile} already exists')
+            return newFile
+        # Load content #
+        logging.info(f'\tRenaming card {txtFile} into {os.path.basename(newFile)}')
+        with open(txtFile,'r') as handle:
+            content = handle.read()
+        # Edit content and write #
+        with open(newFile,'w') as handle:
+            for line in content.split('\n'):
+                if line.startswith('shapes'):
+                    line = line.split()
+                    line[2] = line[2].replace(oldBinName,newBinName) # replace only the binname and not the rest
+                    line = '  '.join(line)
+                if line.startswith('bin') or 'autoMCStats' in line:
+                    line = line.replace(oldBinName,newBinName)
+                handle.write(line+'\n') 
+        # return #
+        return newFile
+
     @staticmethod
-    def writeSbatchCommand(mainDir,params={},args={},stageoutFiles=[],output_in_main=False):
+    def writeSbatchScript(mainDir,params={},args={},stageoutFiles=[],output_in_main=False,output_starts_at_zero=False):
         # Make arguments easier to handle #
         if isinstance(args,dict):
             args = [args]
@@ -3222,7 +3407,10 @@ class Datacard:
         if output_in_main:
             config.stageoutDir = mainDir
         elif len(args) > 1:
-            config.stageoutDir = os.path.join(mainDir,'output','${SLURM_ARRAY_TASK_ID}')
+            if output_starts_at_zero:
+                config.stageoutDir = os.path.join(mainDir,'output','$((${SLURM_ARRAY_TASK_ID}-1))')
+            else:
+                config.stageoutDir = os.path.join(mainDir,'output','${SLURM_ARRAY_TASK_ID}')
         else:
             config.stageoutDir = os.path.join(mainDir,'output')
         config.stageoutLogsDir       = os.path.join(mainDir, 'logs')   
@@ -3794,7 +3982,7 @@ if __name__=="__main__":
             slurmScript = os.path.join(outputDir,'slurmSubmission.sh')
             new_script = False
             if not os.path.exists(slurmScript):
-                slurmScript = Datacard.writeSbatchCommand(outputDir,params=paramsToSubmit,args=argsToSubmit,output_in_main=True)
+                slurmScript = Datacard.writeSbatchScript(outputDir,params=paramsToSubmit,args=argsToSubmit,output_in_main=True)
                 new_script = True
 
             #Submit #
