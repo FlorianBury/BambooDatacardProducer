@@ -12,9 +12,11 @@ from context import TFileOpen
 
 ROOT.gROOT.SetBatch(True)
 ROOT.gStyle.SetOptStat(0)
+ROOT.gStyle.SetPadTickY(1)
+ROOT.gStyle.SetPadTickX(1)
 
 class PostfitPlots:
-    def __init__(self,bin_name,output_path,fit_diagnostics_path,processes,fit_type,header,analysis,eras,categories,bin_edges=None,labels=None,label_positions=None,plot_options={},unblind=False,show_ratio=False,sort_by_yield=True,energy='13 TeV',verbose=False):
+    def __init__(self,bin_name,output_path,fit_diagnostics_path,processes,fit_type,analysis,eras,categories,header=None,bin_edges=None,labels=None,label_positions=None,plot_options={},unblind=False,show_ratio=False,sort_by_yield=True,energy='13 TeV',verbose=False):
         """
             Class that performs the postfit plots
 
@@ -127,13 +129,13 @@ class PostfitPlots:
         # Determine the folder name #
         if self._fit_type == 'prefit':
             folderName = 'shapes_prefit'
-            self._header_legend = f'{header}, prefit'
+            self._header_legend = f'{header}, prefit' if header is not None else None
         elif self._fit_type == 'postfit_b':
             folderName = 'shapes_fit_b'
-            self._header_legend = f'{header}, #mu({self._analysis})=#hat{{#mu}}'
+            self._header_legend = f'{header}, #mu({self._analysis})=#hat{{#mu}}' if header is not None else None
         elif self._fit_type == 'postfit_s':
             folderName = 'shapes_fit_s'
-            self._header_legend = f'{header}, #mu({self._analysis})=#hat{{#mu}}'
+            self._header_legend = f'{header}, #mu({self._analysis})=#hat{{#mu}}' if header is not None else None
         else:
             raise RuntimeError(f'Unknown fit_type {self._fit_type}')
 
@@ -354,6 +356,7 @@ class PostfitPlots:
             logging.debug('Plotting bottom pad')
             canvas.cd()
             bottomPad = self._getBottomPad()
+            bottomPad.SetGridy()
             bottomPad.Draw()
             bottomPad.cd()
             # Get ratios #
@@ -365,7 +368,7 @@ class PostfitPlots:
                 maxabsr = 0.
             err_hist = self._getTotalHistError(self._histograms['__combined__']['total'],maxabsr)
             self._changeLabels(err_hist)
-            err_hist.Draw('E2 hist')
+            err_hist.Draw('E2 hist same')
             if self._unblind:
                 err_data.Draw('E1P same')
             logging.debug('... done')
@@ -597,15 +600,16 @@ class PostfitPlots:
         total_err.GetXaxis().SetLabelColor(1)
         total_err.SetMarkerSize(0)
         total_err.SetMarkerColor(12)
-        total_err.SetFillColorAlpha(12, 0.40)
-        total_err.SetMarkerColorAlpha(12,0.40)
-        total_err.SetLineWidth(2)
-        total_err.SetLineStyle(2)
+        total_err.SetFillColorAlpha(42, 1.0)
+        total_err.SetMarkerColorAlpha(42,1.0)
+        total_err.SetFillStyle(3154)
+        total_err.SetLineWidth(0)
 
         total_hist.SetMarkerSize(0)
-        total_hist.SetMarkerColorAlpha(12,0.40)
+        total_hist.SetMarkerColorAlpha(42,1.0)
         total_hist.SetLineWidth(0)
-        total_hist.SetFillColorAlpha(12, 0.40)
+        total_hist.SetFillColorAlpha(42,1.0)
+        total_hist.SetFillStyle(3154)
 
         # Fill #
         for i in range(1,total_hist.GetNbinsX()+1):
@@ -631,6 +635,8 @@ class PostfitPlots:
         self._applyCustomAxisOptions(total_err.GetXaxis(),optx)
         self._applyCustomAxisOptions(total_err.GetYaxis(),opty,minr,maxr)
 
+        total_err.GetYaxis().SetNdivisions(505)
+
         # Return #
         return total_err
 
@@ -644,7 +650,7 @@ class PostfitPlots:
         maxabsr = 0.
         for i in range(data.GetN()):
             bin_width = total_hist.GetBinWidth(i+1)
-            dividend = total_hist.GetBinContent(i+1) * bin_width
+            dividend = total_hist.GetBinContent(i+1) 
             # Set point : (data - expectation) / expectation = data/expectation -1 #
             if ys[i] > 0:
                 if dividend > 0:
@@ -699,7 +705,7 @@ class PostfitPlots:
             maxy *= 1e5
         else:
             miny = 0.
-            maxy *= 2.0
+            maxy *= 1.65
         optx = self._plot_options['x-axis'] if 'x-axis' in self._plot_options.keys() else {}
         opty = self._plot_options['y-axis'] if 'y-axis' in self._plot_options.keys() else {}
 
@@ -860,8 +866,10 @@ class PostfitPlots:
         if axis_max is not None and axis_min is not None:
             axis.SetRangeUser(axis_min,axis_max)
         # Generic #
-        axis.SetTickLength(0.04)
-        axis.SetTickSize(0.055)
+        #axis.SetTickLength(0.04)
+        #axis.SetTickSize(0.055)
+        axis.SetMaxDigits(10)
+        axis.SetNdivisions(510)
 
     def _getBackgroundStack(self):
         stack_MC = ROOT.THStack()
@@ -887,7 +895,7 @@ class PostfitPlots:
         return stack_MC
 
     def _getLegend(self):
-        if "splitline" in self._header_legend:
+        if self._header_legend is not None and "splitline" in self._header_legend:
             bottom_legend = 0.52
         else :
             bottom_legend = 0.64
@@ -905,11 +913,12 @@ class PostfitPlots:
         legend.SetBorderSize(0)
         legend.SetFillColor(10)
         legend.SetTextSize(0.040 if self._show_ratio else 0.03)
-        legend.SetHeader(self._header_legend)
-        header = legend.GetListOfPrimitives().First()
-        header.SetTextSize(0.05 if self._show_ratio else 0.04)
-        header.SetTextColor(1)
-        header.SetTextFont(62)
+        if self._header_legend is not None:
+            legend.SetHeader(self._header_legend)
+            header = legend.GetListOfPrimitives().First()
+            header.SetTextSize(0.05 if self._show_ratio else 0.04)
+            header.SetTextColor(1)
+            header.SetTextFont(62)
 
         # Possible custom choices #
         if 'legend' in self._plot_options.keys():
@@ -919,10 +928,11 @@ class PostfitPlots:
                 legend.SetTextSize(self._plot_options['legend']['textsize'])
             if 'textfont' in self._plot_options['legend'].keys():
                 legend.SetTextFont(self._plot_options['legend']['textfont'])
-            if 'headersize' in self._plot_options['legend'].keys():
-                header.SetTextSize(self._plot_options['legend']['headersize'])
-            if 'headerfont' in self._plot_options['legend'].keys():
-                header.SetTextFont(self._plot_options['legend']['headerfont'])
+            if self._header_legend is not None:
+                if 'headersize' in self._plot_options['legend'].keys():
+                    header.SetTextSize(self._plot_options['legend']['headersize'])
+                if 'headerfont' in self._plot_options['legend'].keys():
+                    header.SetTextFont(self._plot_options['legend']['headerfont'])
 
         return legend
 
@@ -986,8 +996,8 @@ class PostfitPlots:
 
 
     def _getCMSLabels(self,lumi):
-        x0 = 0.22
-        y0 = 0.953 if self._show_ratio else 0.935
+        x0 = 0.15
+        y0 = 0.955 if self._show_ratio else 0.935
         ypreliminary = 0.95 if self._show_ratio else 0.935
         xpreliminary = 0.08 if self._show_ratio else 0.085
         ylumi = 0.95 if self._show_ratio else 0.965

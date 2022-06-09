@@ -1,13 +1,16 @@
 import os
 import sys
+import copy
 import json
 import functools
 import numpy as np
+import logging
 import ROOT
 
 class NonClosureDY:
     def __init__(self,**kwargs):
         self.path_json = os.path.abspath(os.path.join(os.path.dirname(__file__),kwargs['path_json']))
+        logging.info(f'\tLoading {self.path_json}')
         with open(self.path_json,'r') as handle:
             self.content = json.load(handle)
 
@@ -89,6 +92,7 @@ class NonClosureDY:
 class NonClosureFake:
     def __init__(self,**kwargs):
         self.path_json = os.path.abspath(os.path.join(os.path.dirname(__file__),kwargs['path_json']))
+        logging.info(f'\tLoading {self.path_json}')
         with open(self.path_json,'r') as handle:
             self.content = json.load(handle)
 
@@ -109,62 +113,84 @@ class NonClosureFake:
         return lambda x : 1 - abs(1-nom)
 
     @staticmethod
-    def _slope_up(slope):
-        return lambda x : 1 + max(min(slope*x,1.),-1.)
+    def _slope_up(slope,cog):
+        return lambda x : 1 + min(max(slope*(x-cog),-1.),1.)
 
     @staticmethod
-    def _slope_down(slope):
-        return lambda x : 1 - max(min(slope*x,1.),-1.)
+    def _slope_down(slope,cog):
+        return lambda x : 1 - min(max(slope*(x-cog),-1.),1.)
 
-    #def modify(self,h,cat,group,**kwargs):
+    def modify(self,h,cat,group,**kwargs):
         # Decision to only use the norm effect and not the slope 
-        #assert isinstance(h,ROOT.TH1)
-        #if cat not in self.categories:
-        #    raise RuntimeError(f'Could not find cat `{cat}` in {self.path_json}')
-        #cog = self.content[cat]['cog']
-
-        #for i in range(1,h.GetNbinsX()+1):
-        #    x = h.GetXaxis().GetBinCenter(i)-cog
-        #    y = h.GetBinContent(i)
-        #    h.SetBinContent(i,y*f(x))
-
-    def additional(self,h,cat,group,systName,**kwargs):
         assert isinstance(h,ROOT.TH1)
-        cog   = self.content[kwargs['key']]['cog']
+        if cat not in self.categories:
+            raise RuntimeError(f'Could not find cat `{cat}` in {self.path_json}')
+        if len(set(['cog','nom','slope']).intersection((self.content[kwargs['key']].keys()))) < 3:
+            return
+        cog = self.content[kwargs['key']]['cog']
         nom   = self.content[kwargs['key']]['nom']
         slope = self.content[kwargs['key']]['slope']
-        
-        h_nom_up     = h.Clone(f"{h.GetName()}_{systName}_nom_up")
-        h_nom_down   = h.Clone(f"{h.GetName()}_{systName}_nom_down")
-        h_slope_up   = h.Clone(f"{h.GetName()}_{systName}_slope_up")
-        h_slope_down = h.Clone(f"{h.GetName()}_{systName}_slope_down")
-
-        lambda_nom_up     = self._nom_up(nom)
-        lambda_nom_down   = self._nom_down(nom)
-        lambda_slope_up   = self._slope_up(nom)
-        lambda_slope_down = self._slope_down(nom)
+        #print (f"cog = {cog:5.3f},{nom:5.3f},{slope:5.3f}")
 
         for i in range(1,h.GetNbinsX()+1):
             x = h.GetXaxis().GetBinCenter(i)-cog
             y = h.GetBinContent(i)
-            h_nom_up.SetBinContent(i,   y * lambda_nom_up(x))
-            h_nom_down.SetBinContent(i, y * lambda_nom_down(x))
-            h_slope_up.SetBinContent(i,   y * lambda_slope_up(x))
-            h_slope_down.SetBinContent(i, y * lambda_slope_down(x))
+            ny = y*nom*(1+slope*x)
+            h.SetBinContent(i,ny)
+            #print (f"x = {x+cog:10.5f}, x-cog = {x:10.5f}, y = {y:10.5f},y*nom = {y*nom:10.5f},(1+slope*x) = {(1+slope*x):10.5f},ny = {ny:10.5f} -> diff = {2*(ny-y)/(ny+y+1e-8)*100:5.2f}%")
 
+    def additional(self,h,cat,group,systName,**kwargs):
+        assert isinstance(h,ROOT.TH1)
+        print (id(h))
+        h = copy.deepcopy(h)
+        print (id(h))
+        cog   = self.content[kwargs['key']]['cog']      if 'cog' in self.content[kwargs['key']].keys() else None
+        nom   = self.content[kwargs['key']]['nom']      if 'nom' in self.content[kwargs['key']].keys() else None
+        slope = self.content[kwargs['key']]['slope']    if 'slope' in self.content[kwargs['key']].keys() else None 
+        
+        self.modify(h,cat,group,**kwargs)
+
+        if nom is not None:
+            h_nom_up     = h.Clone(f"{h.GetName()}_{systName}_nom_up")
+            h_nom_down   = h.Clone(f"{h.GetName()}_{systName}_nom_down")
+            lambda_nom_up     = self._nom_up(nom)
+            lambda_nom_down   = self._nom_down(nom)
+
+        if cog is not None and slope is not None:
+            h_slope_up   = h.Clone(f"{h.GetName()}_{systName}_slope_up")
+            h_slope_down = h.Clone(f"{h.GetName()}_{systName}_slope_down")
+            lambda_slope_up   = self._slope_up(slope,cog)
+            lambda_slope_down = self._slope_down(slope,cog)
+
+        for i in range(1,h.GetNbinsX()+1):
+            x = h.GetXaxis().GetBinCenter(i)
+            y = h.GetBinContent(i)
+            if nom is not None:
+                h_nom_up.SetBinContent(i,   y * lambda_nom_up(x))
+                h_nom_down.SetBinContent(i, y * lambda_nom_down(x))
+            if cog is not None and slope is not None:
+                h_slope_up.SetBinContent(i,   y * lambda_slope_up(x))
+                h_slope_down.SetBinContent(i, y * lambda_slope_down(x))
+
+        dRet = {}
+        if nom is not None:
+            dRet[f'{systName}_nomUp']   = h_nom_up
+            dRet[f'{systName}_nomDown'] = h_nom_down
+        if cog is not None and slope is not None:
+            dRet[f'{systName}_slopeUp']   = h_slope_up
+            dRet[f'{systName}_slopeDown'] = h_slope_down
+
+        return dRet
         
         #return {f'{systName}_nomUp'     : h_nom_up,
         #        f'{systName}_nomDown'   : h_nom_down,
         #        f'{systName}_slopeUp'   : h_slope_up,
         #        f'{systName}_slopeDown' : h_slope_down}
-        # Decision to only use the norm effect and not the slope 
 
-        return {f'{systName}_nomUp'     : h_nom_up,
-                f'{systName}_nomDown'   : h_nom_down}
-
-class UnderlyingEvent:
+class Theory:
     def __init__(self,**kwargs):
         self.path_json = os.path.abspath(os.path.join(os.path.dirname(__file__),kwargs['path_json']))
+        logging.info(f'\tLoading {self.path_json}')
         with open(self.path_json,'r') as handle:
             self.content = json.load(handle)
 

@@ -1181,7 +1181,7 @@ class Datacard:
                         N = max([len(key) for key in additional_syst.keys()]) + 5 
                         # Add the additional syst to the content #
                         for key,h in additional_syst.items():
-                            intChange = 2*(h.Integral()-self.content[cat][group]['nominal'].Integral())/(h.Integral()+self.content[cat][group]['nominal'].Integral()+1e-9)
+                            intChange = 2*(h.Integral()-self.content[cat][group]['nominal'].Integral())/(h.Integral()+self.content[cat][group]['nominal'].Integral()+1e-9)*100
                             logging.info(f'\t\t-> Adding systematic shape {key:{N}s} [{intChange:+8.3f}%]')
                         self.content[cat][group].update(additional_syst)
             logging.info('... done')
@@ -3004,6 +3004,8 @@ class Datacard:
                     def getProcesses(samples):
                         processes = {}
                         for sample, sampleCfg in samples.items():
+                            if 'hide' in sampleCfg and sampleCfg['hide']:
+                                continue
                             if 'group' in sampleCfg.keys():
                                 group = sampleCfg['group']
                             else:
@@ -3049,6 +3051,16 @@ class Datacard:
                                             'processes'             : processes,
                                             'eras'                  : era,
                                             'fit_type'              : combineMode})
+                            # Test if categories of the plot are in the file #
+                            binsInFile = set()
+                            for binName in binNames:
+                                for e in era:
+                                    binName = binName.replace(f'_{e}','')
+                                binsInFile.add(binName)
+                            catsForPlot = set(plotCfg['categories'])
+                            if len(binsInFile.intersection(set(plotCfg['categories']))) == 0:
+                                logging.info(f"Categories for plots {plotCfg['categories']} do not match any content, will skip")
+                                continue
                             # Bin width #
                             if 'keep_bin_width' in plotCfg.keys():
                                 if plotCfg['keep_bin_width']:
@@ -3069,7 +3081,7 @@ class Datacard:
                                     plotCfg['bin_edges'] = list(bin_edges[era[0]].values())
                                     if len(era) > 1:
                                         # Still check that bin edges are the same #
-                                        for cat in categories:
+                                        for cat in plotCfg['categories']:
                                             bin_eras = [bin_edges[e][cat] for e in era]
                                             if not all ([bin_eras[0] == subbin for subbin in bin_eras[1:]]):
                                                 logging.warning(f'In category {cat}, bin edges vary -> this might produce weird plots')
