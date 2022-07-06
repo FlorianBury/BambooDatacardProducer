@@ -16,7 +16,7 @@ ROOT.gStyle.SetPadTickY(1)
 ROOT.gStyle.SetPadTickX(1)
 
 class PostfitPlots:
-    def __init__(self,bin_name,output_path,fit_diagnostics_path,processes,fit_type,analysis,eras,categories,header=None,bin_edges=None,labels=None,label_positions=None,plot_options={},unblind=False,show_ratio=False,sort_by_yield=True,energy='13 TeV',verbose=False):
+    def __init__(self,bin_name,output_path,fit_diagnostics_path,processes,fit_type,analysis,eras,categories,header=None,bin_edges=None,labels=None,label_positions=None,plot_options={},unblind=False,show_ratio=False,sort_by_yield=True,yield_table=False,energy='13 TeV',verbose=False):
         """
             Class that performs the postfit plots
 
@@ -37,6 +37,8 @@ class PostfitPlots:
             - unblind [bool]                : whether to show data [DEFAULT=False]
             - show_ratio [bool]             : whether to show the bottom plot [DEFAULT=False]
             - sort_by_yield [bool]          : whether to sort the MC backgrounds per yields [DEFAULT=True], if False will plot the in the other given in the processes
+            - yield_table [bool]            : whether to produce the yield tables (tex file) and run LateX [DEFAULT=False]
+            - energy [str]                  : label on top of plot [DEFAULT='13 TeV'] 
             - verbose [bool]                : show verbose log [DEFAULT=False]
 
             # Notes #
@@ -178,10 +180,10 @@ class PostfitPlots:
             lumi += lumis[era]
         # PC recommendation : always three digits
         if lumi > 100:
-            lumi = str(round(lumi))
+            self._lumi = str(round(lumi))
         else:
-            lumi = str(round(lumi,1))
-        lumi += ' fb^{-1} '+f'({energy})'
+            self._lumi = str(round(lumi,1))
+        self._lumi += ' fb^{-1} '+f'({energy})'
 
         # Bin edges #
         if self._bin_edges is not None:
@@ -338,7 +340,7 @@ class PostfitPlots:
         if self._unblind:
             self._histograms['__combined__']['data'].Draw('E1P same')
         # Draw lumi labels #
-        CMS_labels = self._getCMSLabels(lumi)
+        CMS_labels = self._getCMSLabels()
         for label in CMS_labels:
             label.Draw()
         # Draw lines #
@@ -382,6 +384,11 @@ class PostfitPlots:
                                 
         canvas.Print(pdfPath)
         logging.info(f'Plot saved as {pdfPath}')
+
+        # Produce tex yield table
+        if yield_table:
+            tex_path = self._produceYieldTable()
+            self._runLatex(tex_path)
 
         # Give ownership of the histograms to python so it can use the garbage cleaning #
         for cat in self._histograms.keys():
@@ -995,7 +1002,7 @@ class PostfitPlots:
         return bottomPad
 
 
-    def _getCMSLabels(self,lumi):
+    def _getCMSLabels(self):
         x0 = 0.15
         y0 = 0.955 if self._show_ratio else 0.935
         ypreliminary = 0.95 if self._show_ratio else 0.935
@@ -1024,7 +1031,7 @@ class PostfitPlots:
         label_preliminary.SetFillStyle(0)
         label_preliminary.SetBorderSize(0)
         label_luminosity = ROOT.TPaveText(xlumi, y0 + 0.0035, xlumi + 0.0900, y0 + 0.040, "NDC")
-        label_luminosity.AddText(lumi)
+        label_luminosity.AddText(self._lumi)
         label_luminosity.SetTextFont(42)
         label_luminosity.SetTextAlign(13)
         label_luminosity.SetTextSize(title_size_lumi)
@@ -1034,4 +1041,86 @@ class PostfitPlots:
 
         return [label_cms, label_preliminary, label_luminosity]
 
+    def _makeYieldRow(self,label,process):
+        if '#' in label or '_' in label:
+            row = [f"${label}$".replace('#','\\')]
+        else:
+            row = [label]
+        err_ptr = ctypes.c_double(0.)
+        for cat in self._histograms.keys():
+            h = self._histograms[cat][process]
+            if isinstance(h,ROOT.TH1):
+                y = h.IntegralAndError(1,h.GetNbinsX(),err_ptr)
+                err = err_ptr.value
+            elif isinstance(h,ROOT.TGraphAsymmErrors):
+                y = sum(list(h.GetY()))
+                err = np.sqrt(sum([max(h.GetErrorYhigh(i),h.GetErrorYlow(i))**2  for i in range(h.GetN())]))
+            else:
+                raise RuntimeError(f'Type {type(h)} not expected')
+            row.append(f'${y:.2f} \pm {err:.2f}$')
+        return ' & '.join(row) + ' \\\\'
 
+    def _produceYieldTable(self):
+        content = []
+        # Make header #
+        content.append('\hline')
+        content.append(' & '.join(['Process'] + self._labels + ['Inclusive']) + ' \\\\')
+        content.append('\hline')
+        content.append('\hline')
+        # Make caption #
+        caption = f"Yield table for "
+        if "#" in self._header_legend or "_" in self._header_legend:
+            caption += f"${self._header_legend}$".replace("#","\\") 
+        else:
+            caption += f"{self._header_legend}"
+        caption += f" at ${self._lumi}$" 
+        # Run through backgrounds #
+        for process in self._order:
+            if process == 'total' or self._options[process]['type'] != 'mc':
+                continue
+            content.append(self._makeYieldRow(label=self._options[process]['label'],process=process))
+        content.append('\hline')
+        # Add total #
+        content.append(self._makeYieldRow(label='Total backgrounds',process='total'))
+        content.append('\hline')
+        # Run through signals #
+        for process in self._order:
+            if process == 'total' or self._options[process]['type'] != 'signal':
+                continue
+            content.append(self._makeYieldRow(label=self._options[process]['label'],process=process))
+        content.append('\hline')
+        # Add data #
+        content.append(self._makeYieldRow(label='Data',process='data'))
+        content.append('\hline')
+        # Write to file #
+        tex_path = os.path.join(self._output_path,'yield_table.tex')
+        with open(tex_path,'w') as handle:
+            handle.write(r"\documentclass{article}"+"\n")
+            handle.write(r"\usepackage[a4paper,landscape,margin=1cm]{geometry}"+"\n")
+            handle.write(r"\usepackage{graphicx}"+"\n")
+            handle.write(r"\begin{document}"+"\n")
+            handle.write("\t"+r"\begin{table}"+"\n")
+            handle.write("\t"+r"\caption{{{}}}".format(caption)+"\n")
+            handle.write("\t\t"+r"\begin{center}"+"\n")
+            handle.write("\t\t"+r'\resizebox{\linewidth}{!}{\begin{tabular}'+f'{{|l|{"r"*(len(self._histograms)-1)}|r|}}'+"\n")
+            for line in content:
+                handle.write("\t\t\t"+line+"\n")
+            handle.write("\t\t"+r"\end{tabular}}"+"\n")
+            handle.write("\t\t"+r"\end{center}"+"\n")
+            handle.write("\t"+r"\end{table}"+"\n")
+            handle.write(r"\end{document}"+"\n")
+        logging.info(f'Yield table saved as {tex_path}')
+        # Return #
+        return tex_path 
+            
+    def _runLatex(self,tex_path):
+        import subprocess
+        logging.info("Starting pdflatex")
+        cmd = ['pdflatex','-halt-on-error','-output-directory',os.path.dirname(tex_path),tex_path]
+        process = subprocess.Popen(cmd,universal_newlines=True,stderr=subprocess.STDOUT,stdout=subprocess.PIPE)
+        out, err = process.communicate()
+        if process.returncode != 0:
+            for line in out.split('\n'):
+                logging.warning(line)
+            raise RuntimeError(f'LateX command : `{" ".join(cmd)}` failed, see log above')
+        logging.info(f'Yield table produced in {tex_path.replace(".tex",".pdf")}')

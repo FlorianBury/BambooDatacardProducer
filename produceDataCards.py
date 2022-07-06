@@ -67,13 +67,14 @@ COMBINE_DEFAULT_ARGS = [
 
 
 class Datacard:
-    def __init__(self,outputDir=None,configPath=None,path=None,yamlName=None,worker=None,groups=None,shapeSyst=None,normSyst=None,histConverter=None,era=None,use_syst=False,include_overflow=False,root_subdir=None,histCorrections=None,pseudodata=False,rebin=None,histEdit=None,histCut=None,textfiles=None,plotIt=None,combineConfigs=None,logName=None,custom_args=None,save_datacard=True,**kwargs):
+    def __init__(self,outputDir=None,configPath=None,path=None,yamlName=None,worker=None,groups=None,shapeSyst=None,normSyst=None,histConverter=None,era=None,use_syst=False,fix_histograms=True,include_overflow=False,root_subdir=None,histCorrections=None,pseudodata=False,rebin=None,histEdit=None,histCut=None,textfiles=None,plotIt=None,combineConfigs=None,logName=None,custom_args=None,save_datacard=True,**kwargs):
         self.outputDir          = outputDir
         self.configPath         = configPath
         self.path               = path
         self.worker             = worker
         self.era                = era
         self.use_syst           = use_syst
+        self.fix_histograms     = fix_histograms
         self.include_overflow   = include_overflow
         self.yamlName           = yamlName
         self.root_subdir        = root_subdir
@@ -209,16 +210,19 @@ class Datacard:
         if self.pseudodata:
             self.roundFakeData()
         if self.histCorrections is not None:
-            self.applyCorrections(False)
+            self.applyCorrections(after_aggregation=False,after_rebinning=False)
         if self.aggregation:
             self.applyAggregation()
-            self.applyCorrections(True)
+            if self.histCorrections is not None:
+                self.applyCorrections(after_aggregation=True,after_rebinning=False)
         if self.histEdit is not None:
             self.applyEditing()
         if self.histCut is not None:
             self.applyCut()
         if self.rebin is not None:
             self.applyRebinning()
+            if self.histCorrections is not None:
+                self.applyCorrections(after_aggregation=True,after_rebinning=True)
         self.yieldPrintout()
         if self.save_datacard:
             self.saveDatacard()
@@ -516,6 +520,10 @@ class Datacard:
                             self.condGroup[group].append({})
                     files = tmp_files
                 else:
+                    for f in files:
+                        if f not in self.condSample.keys():
+                            self.condSample[f] = []
+                        self.condSample[f].append({'group':group})
                     self.condGroup[group].append({})
                 # Add the link between sample and group #
                 for f in files:
@@ -953,7 +961,7 @@ class Datacard:
                                     raise RuntimeError(f"Could not find syst named {systNameDown} in group {group} for histogram {histName}")
 
                                 # Fix shape in case needed #
-                                if group != 'data_obs':
+                                if group != 'data_obs' and self.fix_histograms:
                                     self.fixHistograms(hnom  = self.content[histName][group]['nominal'],
                                                         hup   = self.content[histName][group][systNameUp],
                                                         hdown = self.content[histName][group][systNameDown])
@@ -975,9 +983,8 @@ class Datacard:
                     # Save nominal (done after because can be correct when fixing systematics) #
                     if 'nominal' not in self.content[histName][group].keys():
                         raise RuntimeError(f"Group {group} nominal histogram {histName} was not found")
-                    if group != 'data_obs':
+                    if group != 'data_obs' and self.fix_histograms:
                         self.fixHistograms(hnom=self.content[histName][group]['nominal'])
-
 
                     self.content[histName][group]['nominal'].SetTitle(group)
                     self.content[histName][group]['nominal'].SetName(group)
@@ -1080,9 +1087,13 @@ class Datacard:
 
     @staticmethod
     def fixHistograms(hnom,hdown=None,hup=None):
-        val     = 1e-5 * min(1.,hnom.Integral()) 
-        valup   = 1e-5 * min(1.,hup.Integral()) if hdown is not None else None
-        valdown = 1e-5 * min(1.,hdown.Integral()) if hdown is not None else None
+        originalYieldNom  = hnom.Integral()
+        originalYieldUp   = hup.Integral() if hup is not None else None
+        originalYieldDown = hdown.Integral() if hdown is not None else None
+        getVal = lambda y : 1e-5 * min(1., max(1e-10, y))
+        val = getVal(hnom.Integral())
+        valup = getVal(hup.Integral()) if hup is not None else None
+        valdown = getVal(hdown.Integral()) if hdown is not None else None
         # Loop over bins #
         for i in range(1,hnom.GetNbinsX()+1):
             # First clip to 0 all negative bin content #
@@ -1095,7 +1106,6 @@ class Datacard:
             if hdown is not None and hdown.GetBinContent(i) <= 0.:
                 hdown.SetBinContent(i,valdown)
                 hdown.SetBinError(i,valdown)
-
             # Second, check the up and down compared to nominal #
             if hnom.GetBinContent(i) > 0 and hdown is not None and hup is not None:
                 # Nominal bin not zero #
@@ -1119,11 +1129,19 @@ class Datacard:
                 if hup is not None and hdown is not None:
                     if abs(hup.GetBinContent(i)) > 0 or abs(hdown.GetBinContent(i)) > 0:
                         # zero nominal but non zero systematics -> set all at 0.00001 #
-                        hnom.SetBinContent(i,0.00001)
-                        hup.SetBinContent(i,0.00001)
-                        hdown.SetBinContent(i,0.00001)
+                        hnom.SetBinContent(i,val)
+                        hup.SetBinContent(i,valup)
+                        hdown.SetBinContent(i,valdown)
+        # Rescale to keep integral consistent #
+        if hnom.Integral() > 0:
+            hnom.Scale(originalYieldNom/hnom.Integral())
+        if hup is not None and hup.Integral() > 0:
+            hup.Scale(originalYieldUp/hup.Integral())
+        if hdown is not None and hdown.Integral() > 0:
+            hdown.Scale(originalYieldDown/hdown.Integral())
 
-    def applyCorrections(self,after_aggregation=True):
+            
+    def applyCorrections(self,after_aggregation=True,after_rebinning=False):
         for corrConfig in self.histCorrections:
             if ":" not in corrConfig['module']:
                 raise RuntimeError(f"`:` needs to be in the module arg {corrConfig['module']}")
@@ -1133,6 +1151,13 @@ class Datacard:
                     continue # Non-closure corrections that require aggregation are already done
                 if not 'aggregation' in corrConfig.keys() and not after_aggregation:
                     continue # Non-closure corrections that do not require aggregation will be done in next call
+            # Check rebinning #
+            if 'rebinned' in corrConfig.keys() and corrConfig['rebinned']:
+                if not after_rebinning:
+                    continue
+            else:
+                if after_rebinning:
+                    continue
 
             # Get the module and class #
             lib, clsName = corrConfig['module'].split(':')
@@ -1388,6 +1413,8 @@ class Datacard:
                 axes = ['x','y']
             else:   
                 raise RuntimeError(f'Histogram {histName} type not understood : {histType}')
+            if self.histCut[cat] is None:
+                continue
 
             # Loop through cut configs #
             logging.info(f'Cutting histogram {histName}')
@@ -1450,6 +1477,8 @@ class Datacard:
                 if not isinstance(rebinSchemes,list):
                     rebinSchemes = [rebinSchemes]
                 for rebinScheme in rebinSchemes:
+                    if rebinScheme is None:
+                        continue
                     method = rebinScheme['method']
                     params = rebinScheme['params']
                     # 1D rebinnings #
@@ -1881,13 +1910,13 @@ class Datacard:
         # Produce inclusive yield table #
         if len(missingCats) == 0:
             # Combine the cards #
-            inclusiveTxtPath = os.path.join(yieldDir,f'datacard.txt')
-            inclusiveYieldPath = os.path.join(yieldDir,f'yields_inclusive.txt')
+            inclusiveTxtPath = os.path.join(yieldDir,f'datacard_{self.era}.txt')
+            inclusiveYieldPath = os.path.join(yieldDir,f'yields_inclusive_{self.era}.txt')
             combine_step_success = self.combineCards(txtPaths.values(),inclusiveTxtPath)
             # Produce inclusive yield
             if combine_step_success:
                 yield_cmd = f"cd {SETUP_DIR}; env -i bash -c 'source {SETUP_SCRIPT} && {ULIMIT} && cd {SCRIPT_DIR} && yield_table.py {inclusiveTxtPath} > {inclusiveYieldPath}'"
-                logging.info('Producing inclusive yield table')
+                logging.info(f'Producing inclusive {self.era} yield table')
                 rc,output = self.run_command(yield_cmd,shell=True, return_output=True)
                 if rc != 0: 
                     if logging.root.level > 10:
