@@ -1055,6 +1055,8 @@ class PostfitPlots:
             elif isinstance(h,ROOT.TGraphAsymmErrors):
                 y = sum(list(h.GetY()))
                 err = np.sqrt(sum([max(h.GetErrorYhigh(i),h.GetErrorYlow(i))**2  for i in range(h.GetN())]))
+            elif h is None:
+                continue
             else:
                 raise RuntimeError(f'Type {type(h)} not expected')
             row.append(f'${y:.2f} \pm {err:.2f}$')
@@ -1064,12 +1066,17 @@ class PostfitPlots:
         content = []
         # Make header #
         content.append('\hline')
-        content.append(' & '.join(['Process'] + self._labels + ['Inclusive']) + ' \\\\')
+        if self._labels is not None:
+            content.append(' & '.join(['Process'] + self._labels + ['Inclusive']) + ' \\\\')
+        else:
+            content.append(' & '.join(['Process'] + [self._bin_name.replace('_',' '),'Inclusive']) + ' \\\\')
         content.append('\hline')
         content.append('\hline')
         # Make caption #
         caption = f"Yield table for "
-        if "#" in self._header_legend or "_" in self._header_legend:
+        if self._header_legend is None:
+            caption += self._bin_name.replace('_',' ')
+        elif "#" in self._header_legend or "_" in self._header_legend:
             caption += f"${self._header_legend}$".replace("#","\\") 
         else:
             caption += f"{self._header_legend}"

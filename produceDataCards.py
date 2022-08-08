@@ -2073,7 +2073,7 @@ class Datacard:
             histMax[histName] = max(hstack.GetStack().Last().GetMaximum(),histMax[histName])
             histMin[histName] = min(getMinNonEmptyBins(hstack.GetStack().Last()),histMin[histName])
                 # Last element of stack is the sum
-
+        
         # Files informations #
         config['files'] = {}
         for group,gconfig in self.groups.items():
@@ -2131,12 +2131,13 @@ class Datacard:
             config['plots'][h1n]['show-overflow'] = True
             config['plots'][h1n]['x-axis-range'] = [hist.GetXaxis().GetBinLowEdge(1),hist.GetXaxis().GetBinUpEdge(hist.GetNbinsX())] 
             config['plots'][h1n]['y-axis-format'] = "%1%"
+            config['plots'][h1n]['era'] = self.era
                 # No Events/ [bin width] (can be misunderstood)
 
             # Adjust the y axis #
             if histMax[h1] > 0.:
-                config['plots'][h1n]['y-axis-range'] = [0.,histMax[h1]*1.3]
-                config['plots'][h1n]['log-y-axis-range'] = [histMin[h1]*0.1,histMax[h1]*1000]
+                config['plots'][h1n]['y-axis-range'] = [0.,histMax[h1]*1.5]
+                config['plots'][h1n]['log-y-axis-range'] = [max(1e-2,histMin[h1]*0.1),histMax[h1]*1000]
                 config['plots'][h1n]['ratio-y-axis-range'] = [0.8,1.2]
             # Add labels #
             if 'labels' in config['plots'][h1n].keys():
@@ -2218,34 +2219,33 @@ class Datacard:
                         mainConfig['systematics'].append(syst)
         return mainConfig
 
-    def run_plotIt(self,config,eras):
+    def run_plotIt(self,config,era):
         # Write yaml file #
         path_plotIt = os.path.join(self.outputDir,'plotit')
-        path_yaml = os.path.join(path_plotIt,'plots.yml')
+        path_yaml = os.path.join(path_plotIt,f'plots_{era}.yml')
         with open(path_yaml,'w') as handle:
             yaml.dump(config,handle)
         logging.info("New yaml file for plotIt : %s"%path_yaml)
 
         # PlotIt command #
-        for era in eras:
-            path_pdf = os.path.join(path_plotIt,f'plots_{era}')
-            if not os.path.exists(path_pdf):
-                os.makedirs(path_pdf)
-            logging.info("plotIt command :")
-            cmd = f"plotIt -i {path_plotIt} -o {path_pdf} -e {era} {path_yaml}"
-            logging.info(cmd)
-            if self.which('plotIt') is not None:
-                logging.info("Calling plotIt")
-                exitCode,output = self.run_command(shlex.split(cmd),return_output=True)
-                if exitCode != 0:
-                    if logging.root.level > 10:
-                        for line in output:
-                            logging.info(line.strip())
-                    logging.info('... failure (see log above)')
-                else:
-                    logging.info('... success')
+        path_pdf = os.path.join(path_plotIt,f'plots_{era}')
+        if not os.path.exists(path_pdf):
+            os.makedirs(path_pdf)
+        logging.info("plotIt command :")
+        cmd = f"plotIt -i {path_plotIt} -o {path_pdf} -e {era} {path_yaml}"
+        logging.info(cmd)
+        if self.which('plotIt') is not None:
+            logging.info("Calling plotIt")
+            exitCode,output = self.run_command(shlex.split(cmd),return_output=True)
+            if exitCode != 0:
+                if logging.root.level > 10:
+                    for line in output:
+                        logging.info(line.strip())
+                logging.info('... failure (see log above)')
             else:
-                logging.warning("plotIt not found")
+                logging.info('... success')
+        else:
+            logging.warning("plotIt not found")
 
     def check_datacards(self):
         txtPaths = self.getTxtFilesPath()
@@ -3027,7 +3027,8 @@ class Datacard:
                 if 'prefit' in combineMode or 'postfit' in combineMode:
                     fitdiagFile = glob.glob(os.path.join(subdirBin,'batch','output','fitDiagnostic*root'))
                     if len(fitdiagFile) == 0:
-                        raise RuntimeError("Could not find any fitdiag file in subdir")
+                        logging.error("Could not find any fitdiag file in subdir")
+                        continue
                     fitdiagFile = fitdiagFile[0].replace('/auto','') 
                     # Generate dat config file #
                     def getProcesses(samples):
@@ -3119,7 +3120,13 @@ class Datacard:
                                 del plotCfg['keep_bin_width']
                             if logging.root.level <= 10:
                                 plotCfg['verbose'] = True
-                            PostfitPlots(**plotCfg)
+                            if 'logy' in plotCfg['plot_options'].keys() and plotCfg['plot_options']['logy'] == 'both':
+                                plotCfg['plot_options']['logy'] = False
+                                PostfitPlots(**plotCfg)
+                                plotCfg['plot_options']['logy'] = True
+                                PostfitPlots(**plotCfg)
+                            else:
+                                PostfitPlots(**plotCfg)
 
 
                     # Nuisances likelihoods #
@@ -3132,7 +3139,7 @@ class Datacard:
                         path_plots = [os.path.join(subdirBin,'nuisances.pdf'), os.path.join(subdirBin,'nuisances.png')]
                         resultFile = glob.glob(os.path.join(subdirBin,'higgs*root'))
                         if len(resultFile) == 0:
-                            raise RuntimeError(f'Could not find result file in {subdirBin}')
+                            raise RuntimeError(f'Could not find result file in {subdirBin} for nuisance likelihood scan')
 
                         content = {
                             'paths'                 : path_plots,
@@ -3874,10 +3881,9 @@ if __name__=="__main__":
             make_plots = False
             make_yields = False
         # Need to be done prior to avoid thread concurrences
-        plotIt_configs = []
+        plotIt_configs = collections.defaultdict(list)
         # Serial processing #
         if args.jobs is None:
-            plotIt_configs = []
             for instance in instances:
                 if make_prod:
                     instance.run_production()
@@ -3894,7 +3900,7 @@ if __name__=="__main__":
             if make_plots:
                 plotIt_config = instance.prepare_plotIt()
                 if plotIt_config is not None:
-                    plotIt_configs.append(plotIt_config)
+                    plotIt_configs[instance.era].append(plotIt_config)
             if make_yields:
                 instance.saveYieldFromDatacard()
 
@@ -3968,14 +3974,15 @@ if __name__=="__main__":
                 if make_plots:
                     plotIt_config = instance.prepare_plotIt()
                     if plotIt_config is not None:
-                        plotIt_configs.append(plotIt_config)
+                        plotIt_configs[instanceInt.era].append(plotIt_config)
                 if make_yields:
                     instanceInt.saveYieldFromDatacard()
 
         if len(plotIt_configs) > 0:
             # Merge and run plotit (single thread anyway) #
-            plotIt_config = Datacard.merge_plotIt(plotIt_configs)
-            instances[0].run_plotIt(plotIt_config,eras)
+            for era in plotIt_configs.keys():
+                plotIt_config = Datacard.merge_plotIt(plotIt_configs[era])
+                instances[0].run_plotIt(plotIt_config,era)
 
     # instance for combine #
     combine_instance = Datacard(configPath      = os.path.abspath(args.yaml),
