@@ -291,15 +291,8 @@ class PostfitPlots:
         stack_MC = self._getBackgroundStack()
         logging.debug('... done')
                 
-        # Add to legend #
-        if self._unblind:
-            legend.AddEntry(self._histograms['__combined__']['data'],"Data","p")
-        for group in self._order:
-            # Get options #
-            optCfg = self._options[group]
-            if optCfg['type'] == 'mc' and group != 'total':
-                legend.AddEntry(self._histograms['__combined__'][group],optCfg['label'],'f')
-        legend.AddEntry(self._histograms['__combined__']['total'],"Uncertainty","f")
+        # Fill legend #
+        self._fillLegend(legend)
 
         # Start plotting #
         logging.debug('Starting plotting')
@@ -333,8 +326,6 @@ class PostfitPlots:
             optCfg = self._options[group]
             if optCfg['type'] == 'signal':
                 self._histograms['__combined__'][group].Draw('hist same')
-                # Add to legend #
-                legend.AddEntry(self._histograms['__combined__'][group],optCfg['label'],'f')
 
         # Draw data if unblinded #
         if self._unblind:
@@ -379,7 +370,7 @@ class PostfitPlots:
         if not os.path.exists(self._output_path):
             logging.info(f'Output path {self._output_path} did not exist, will create it')
             os.makedirs(self._output_path)
-        pdfName = f'{self._bin_name}_{self._fit_type}_{opt}_unblinded_{self._unblind}_{"_".join([str(era) for era in self._eras])}.pdf'
+        pdfName = f'{self._bin_name}_{self._fit_type}_{opt}_unblinded_{self._unblind}_{"_".join([str(era) for era in sorted(self._eras)])}.pdf'
         pdfPath = os.path.join(self._output_path,pdfName)
                                 
         canvas.Print(pdfPath)
@@ -706,13 +697,14 @@ class PostfitPlots:
 
         # Custom #
         maxy = h_tot.GetMaximum()
+        hist_ratio = 0.58
         if 'logy' in self._plot_options.keys() and self._plot_options['logy']:
             # If log, need to adapt min and max
-            miny = 1e-2 
-            maxy *= 1e5
+            miny = 1e-2
+            maxy = maxy**(1/hist_ratio) / miny**((1-hist_ratio)/hist_ratio)
         else:
             miny = 0.
-            maxy *= 1.65
+            maxy *= (1/hist_ratio) * maxy - ((1-hist_ratio)/hist_ratio) * miny
         optx = self._plot_options['x-axis'] if 'x-axis' in self._plot_options.keys() else {}
         opty = self._plot_options['y-axis'] if 'y-axis' in self._plot_options.keys() else {}
 
@@ -796,7 +788,7 @@ class PostfitPlots:
         # Find ymax from total histogram #
         ymax = self._histograms['__combined__']['total'].GetMaximum()
         if 'logy' in self._plot_options.keys() and self._plot_options['logy']:
-            ymax *= 10
+            ymax *= 3.
         else:
             ymax *= 1.2
         # Make lines objects #
@@ -913,17 +905,17 @@ class PostfitPlots:
             assert len(self._plot_options['legend']['position']) == 4
             legend = ROOT.TLegend(*self._plot_options['legend']['position'])
         else:
-            legend = ROOT.TLegend(0.2,bottom_legend,0.9450, 0.90)
+            legend = ROOT.TLegend(0.18,bottom_legend,0.94, 0.9)
 
         # Esthetics #
         legend.SetFillStyle(0)
         legend.SetBorderSize(0)
         legend.SetFillColor(10)
-        legend.SetTextSize(0.040 if self._show_ratio else 0.03)
+        legend.SetTextSize(0.03 if self._show_ratio else 0.02)
         if self._header_legend is not None:
             legend.SetHeader(self._header_legend)
             header = legend.GetListOfPrimitives().First()
-            header.SetTextSize(0.05 if self._show_ratio else 0.04)
+            header.SetTextSize(0.04 if self._show_ratio else 0.03)
             header.SetTextColor(1)
             header.SetTextFont(62)
 
@@ -942,6 +934,39 @@ class PostfitPlots:
                     header.SetTextFont(self._plot_options['legend']['headerfont'])
 
         return legend
+
+    def _fillLegend(self,legend):
+        self._legend_columns = [[] for _ in range(legend.GetNColumns())]
+        # Add data to legend #
+        if self._unblind:
+            self._legend_columns[0].append((self._histograms['__combined__']['data'],"Data","p"))
+        # Add signals to first column #
+        for group in self._order:
+            # Get options #
+            optCfg = self._options[group]
+            if optCfg['type'] == 'signal' and group != 'total':
+                self._legend_columns[0].append((self._histograms['__combined__'][group],optCfg['label'],'f'))
+        # Add uncertainty to legend first column #
+        self._legend_columns[0].append((self._histograms['__combined__']['total'],"Uncertainty","f"))
+        # Add backgrounds to other columns #
+        index = 0
+        for group in self._order:
+            # Get options #
+            optCfg = self._options[group]
+            if optCfg['type'] == 'mc' and group != 'total':
+                column_index  = ((index % (legend.GetNColumns() - 1)) + 1) if legend.GetNColumns() > 0 else 0
+                self._legend_columns[column_index].append((self._histograms['__combined__'][group],optCfg['label'],'f'))
+                index += 1
+        # Make each column the same size #
+        col_size = max([len(self._legend_columns[i]) for i in range(len(self._legend_columns))])
+        for i in range(len(self._legend_columns)):
+            if len(self._legend_columns[i]) < col_size:
+                self._legend_columns[i] += [(ROOT.TObject(),"","")] * (col_size-len(self._legend_columns[i]))
+        # Add columns to legend #
+        for i in range(legend.GetNColumns()*col_size):
+            column_index = i % legend.GetNColumns()
+            row_index = i // legend.GetNColumns()
+            legend.AddEntry(*self._legend_columns[column_index][row_index])
 
     def _getCanvas(self):
         WW = 900
