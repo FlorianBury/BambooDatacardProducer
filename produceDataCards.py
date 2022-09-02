@@ -333,7 +333,7 @@ class Datacard:
             # Get histograms #
             hist_dict = self.getHistograms(f)
             if len(hist_dict) == 0 or sum([len(val) for val in hist_dict.values()]) == 0:
-                logging.debug('\t... No histogram taken from this sample')
+                logging.debug('\tNo histogram taken from this sample')
                 continue
             logging.debug("\tFound following histograms :")
             for histName in hist_dict.keys():
@@ -629,6 +629,11 @@ class Datacard:
             xsec = None
             sumweight = None
             br = None
+
+        logging.debug(f"\tFound following information")
+        for name,val in zip(['cross-section','Sum of weights','branching-ratio'],[xsec,sumweight,br]):
+            if val is not None:
+                logging.debug(f"\t... {name:20s} = {val:25.5f}")
 
         # Open ROOT file #
         with TFileOpen(rootfile,'r') as F:
