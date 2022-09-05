@@ -219,6 +219,7 @@ class Datacard:
             self.applyEditing()
         if self.histCut is not None:
             self.applyCut()
+        self.applyOverflow()
         if self.rebin is not None:
             self.applyRebinning()
             if self.histCorrections is not None:
@@ -378,70 +379,6 @@ class Datacard:
                     name = f'{histName}__{group}__{systName}'
                     hist.SetName(name)
                     hist.SetTitle(name)
-
-        # Overflow bins #
-        for histName in self.content.keys(): 
-            for group in self.content[histName].keys():
-                for h in self.content[histName][group].values():
-                    if h.__class__.__name__.startswith('TH1'):
-                        N = h.GetNbinsX()
-                        if self.include_overflow:
-                            # Include under and overflow bins
-                            h.SetBinContent(1,h.GetBinContent(1)+h.GetBinContent(0))
-                            h.SetBinError(1,math.sqrt(h.GetBinError(1)**2+h.GetBinError(0)**2))
-                            h.SetBinContent(N,h.GetBinContent(N)+h.GetBinContent(N+1))
-                            h.SetBinError(N,math.sqrt(h.GetBinError(N)**2+h.GetBinError(N+1)**2))
-                        # Set under-over flow bins to zero (to avoid confusion)
-                        h.SetBinContent(0,0.)
-                        h.SetBinError(0,0.)
-                        h.SetBinContent(N+1,0.)
-                        h.SetBinError(N+1,0.)
-                    elif h.__class__.__name__.startswith('TH2'):
-                        Nx = h.GetNbinsX()
-                        Ny = h.GetNbinsX()
-                        # Loop over right and left egdes outside the TH2 #
-                        for y in range(1,Ny+1):
-                            if self.include_overflow:
-                                h.SetBinContent(1,y,h.GetBinContent(1,y)+h.GetBinContent(0,y))
-                                h.SetBinError(1,y,math.sqrt(h.GetBinError(1,y)**2+h.GetBinError(0,y)**2))
-                                h.SetBinContent(Nx,y,h.GetBinContent(Nx,y)+h.GetBinContent(Nx+1,y))
-                                h.SetBinError(Nx,y,math.sqrt(h.GetBinError(Nx,y)**2+h.GetBinError(Nx+1,y)**2))
-                            h.SetBinContent(0,y,0.)
-                            h.SetBinError(0,y,0.)
-                            h.SetBinContent(Nx+1,y,0.)
-                            h.SetBinError(Nx+1,y,0.)
-                        # Loop over bottom and top egdes outside the TH2 #
-                        for x in range(1,Nx+1):
-                            if self.include_overflow:
-                                h.SetBinContent(x,1,h.GetBinContent(x,1)+h.GetBinContent(x,0))
-                                h.SetBinError(x,1,math.sqrt(h.GetBinError(x,1)**2+h.GetBinError(x,0)**2))
-                                h.SetBinContent(x,Ny,h.GetBinContent(x,Ny)+h.GetBinContent(x,Ny+1))
-                                h.SetBinError(x,Ny,math.sqrt(h.GetBinError(x,Ny)**2+h.GetBinError(x,Ny+1)**2))
-                            h.SetBinContent(x,0,0.)
-                            h.SetBinError(x,0,0.)
-                            h.SetBinContent(x,Ny+1,0.)
-                            h.SetBinError(x,Ny+1,0.)
-                        # Four corners of the TH2 #
-                        if self.include_overflow:
-                            h.SetBinContent(1,1,h.GetBinContent(1,1)+h.GetBinContent(0,0))
-                            h.SetBinError(1,1,math.sqrt(h.GetBinError(1,1)**2+h.GetBinError(0,0)**2))
-                            h.SetBinContent(1,Ny,h.GetBinContent(1,Ny)+h.GetBinContent(0,Ny+1))
-                            h.SetBinError(1,Ny,math.sqrt(h.GetBinError(1,Ny)**2+h.GetBinError(0,Ny+1)**2))
-                            h.SetBinContent(Nx,1,h.GetBinContent(Nx,1)+h.GetBinContent(Nx+1,0))
-                            h.SetBinError(Nx,1,math.sqrt(h.GetBinError(Nx,1)**2+h.GetBinError(Nx+1,0)**2))
-                            h.SetBinContent(Nx,Ny,h.GetBinContent(Nx,Ny)+h.GetBinContent(Nx+1,Ny+1))
-                            h.SetBinError(Nx,Ny,math.sqrt(h.GetBinError(Nx,Ny)**2+h.GetBinError(Nx+1,Ny+1)**2))
-                        h.SetBinContent(0,0,0.)
-                        h.SetBinError(0,0,0.)
-                        h.SetBinContent(0,Ny+1,0,0.)
-                        h.SetBinError(0,Ny+1,0,0.)
-                        h.SetBinContent(Nx+1,0,0.)
-                        h.SetBinError(Nx+1,0,0.)
-                        h.SetBinContent(Nx+1,Ny+1,0.)
-                        h.SetBinError(Nx+1,Ny+1,0.)
-                    else:
-                        raise NotImplementedError
-
 
     def addSampleToGroup(self,sample,group,hist_dict):
         used = False
@@ -1313,6 +1250,72 @@ class Datacard:
                 error_message += f'\n... {group:20s} -> {histName}'
             raise RuntimeError(error_message)
 
+
+    def applyOverflow(self):
+        # Overflow bins #
+        for histName in self.content.keys(): 
+            for group in self.content[histName].keys():
+                for h in self.content[histName][group].values():
+                    if h.__class__.__name__.startswith('TH1'):
+                        N = h.GetNbinsX()
+                        if self.include_overflow:
+                            # Include under and overflow bins
+                            h.SetBinContent(1,h.GetBinContent(1)+h.GetBinContent(0))
+                            h.SetBinError(1,math.sqrt(h.GetBinError(1)**2+h.GetBinError(0)**2))
+                            h.SetBinContent(N,h.GetBinContent(N)+h.GetBinContent(N+1))
+                            h.SetBinError(N,math.sqrt(h.GetBinError(N)**2+h.GetBinError(N+1)**2))
+                        # Set under-over flow bins to zero (to avoid confusion)
+                        h.SetBinContent(0,0.)
+                        h.SetBinError(0,0.)
+                        h.SetBinContent(N+1,0.)
+                        h.SetBinError(N+1,0.)
+                    elif h.__class__.__name__.startswith('TH2'):
+                        Nx = h.GetNbinsX()
+                        Ny = h.GetNbinsX()
+                        # Loop over right and left egdes outside the TH2 #
+                        for y in range(1,Ny+1):
+                            if self.include_overflow:
+                                h.SetBinContent(1,y,h.GetBinContent(1,y)+h.GetBinContent(0,y))
+                                h.SetBinError(1,y,math.sqrt(h.GetBinError(1,y)**2+h.GetBinError(0,y)**2))
+                                h.SetBinContent(Nx,y,h.GetBinContent(Nx,y)+h.GetBinContent(Nx+1,y))
+                                h.SetBinError(Nx,y,math.sqrt(h.GetBinError(Nx,y)**2+h.GetBinError(Nx+1,y)**2))
+                            h.SetBinContent(0,y,0.)
+                            h.SetBinError(0,y,0.)
+                            h.SetBinContent(Nx+1,y,0.)
+                            h.SetBinError(Nx+1,y,0.)
+                        # Loop over bottom and top egdes outside the TH2 #
+                        for x in range(1,Nx+1):
+                            if self.include_overflow:
+                                h.SetBinContent(x,1,h.GetBinContent(x,1)+h.GetBinContent(x,0))
+                                h.SetBinError(x,1,math.sqrt(h.GetBinError(x,1)**2+h.GetBinError(x,0)**2))
+                                h.SetBinContent(x,Ny,h.GetBinContent(x,Ny)+h.GetBinContent(x,Ny+1))
+                                h.SetBinError(x,Ny,math.sqrt(h.GetBinError(x,Ny)**2+h.GetBinError(x,Ny+1)**2))
+                            h.SetBinContent(x,0,0.)
+                            h.SetBinError(x,0,0.)
+                            h.SetBinContent(x,Ny+1,0.)
+                            h.SetBinError(x,Ny+1,0.)
+                        # Four corners of the TH2 #
+                        if self.include_overflow:
+                            h.SetBinContent(1,1,h.GetBinContent(1,1)+h.GetBinContent(0,0))
+                            h.SetBinError(1,1,math.sqrt(h.GetBinError(1,1)**2+h.GetBinError(0,0)**2))
+                            h.SetBinContent(1,Ny,h.GetBinContent(1,Ny)+h.GetBinContent(0,Ny+1))
+                            h.SetBinError(1,Ny,math.sqrt(h.GetBinError(1,Ny)**2+h.GetBinError(0,Ny+1)**2))
+                            h.SetBinContent(Nx,1,h.GetBinContent(Nx,1)+h.GetBinContent(Nx+1,0))
+                            h.SetBinError(Nx,1,math.sqrt(h.GetBinError(Nx,1)**2+h.GetBinError(Nx+1,0)**2))
+                            h.SetBinContent(Nx,Ny,h.GetBinContent(Nx,Ny)+h.GetBinContent(Nx+1,Ny+1))
+                            h.SetBinError(Nx,Ny,math.sqrt(h.GetBinError(Nx,Ny)**2+h.GetBinError(Nx+1,Ny+1)**2))
+                        h.SetBinContent(0,0,0.)
+                        h.SetBinError(0,0,0.)
+                        h.SetBinContent(0,Ny+1,0,0.)
+                        h.SetBinError(0,Ny+1,0,0.)
+                        h.SetBinContent(Nx+1,0,0.)
+                        h.SetBinError(Nx+1,0,0.)
+                        h.SetBinContent(Nx+1,Ny+1,0.)
+                        h.SetBinError(Nx+1,Ny+1,0.)
+                    else:
+                        raise NotImplementedError
+
+
                 
     def applyEditing(self):
         logging.info('Applying editing')
@@ -1463,10 +1466,20 @@ class Datacard:
         # Get correct histogram #
         if '>' in direction:
             new_nph = split_nphs[1]
+            newh = new_nph.fillHistogram(h.GetName()+'cut')
+            newh.SetBinContent(0,
+                               newh.GetBinContent(0) + split_nphs[0].sumw)
+            newh.SetBinError(0,
+                             np.sqrt(newh.GetBinError(0)**2 + np.sqrt(split_nphs[0].sumw2**2)))
         if '<' in direction:
             new_nph = split_nphs[0]
+            newh = new_nph.fillHistogram(h.GetName()+'cut')
+            newh.SetBinContent(newh.GetNbinsX()+1,
+                               newh.GetBinContent(newh.GetNbinsX()+1) + split_nphs[1].sumw)
+            newh.SetBinError(newh.GetNbinsX()+1,
+                             np.sqrt(newh.GetBinError(newh.GetNbinsX()+1)**2 + np.sqrt(split_nphs[1].sumw2**2)))
         # return ROOT histogram #
-        return new_nph.fillHistogram(h.GetName()+'cut')
+        return newh
 
     def applyRebinning(self):
         assert self.rebin is not None
