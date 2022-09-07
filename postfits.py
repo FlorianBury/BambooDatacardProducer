@@ -696,15 +696,14 @@ class PostfitPlots:
         yaxis = template.GetYaxis()
 
         # Custom #
-        maxy = h_tot.GetMaximum()
         hist_ratio = 0.58
         if 'logy' in self._plot_options.keys() and self._plot_options['logy']:
             # If log, need to adapt min and max
             miny = 1e-2
-            maxy = maxy**(1/hist_ratio) / miny**((1-hist_ratio)/hist_ratio)
+            maxy = h_tot.GetMaximum()**(1/hist_ratio) / miny**((1-hist_ratio)/hist_ratio)
         else:
             miny = 0.
-            maxy *= (1/hist_ratio) * maxy - ((1-hist_ratio)/hist_ratio) * miny
+            maxy = (1/hist_ratio) * h_tot.GetMaximum() - ((1-hist_ratio)/hist_ratio) * miny
         optx = self._plot_options['x-axis'] if 'x-axis' in self._plot_options.keys() else {}
         opty = self._plot_options['y-axis'] if 'y-axis' in self._plot_options.keys() else {}
 
@@ -816,7 +815,7 @@ class PostfitPlots:
                 for i in range(1,len(lines_xpos)):
                     xl = lines_xpos[i-1]
                     xr = lines_xpos[i]
-                    label_pos.append(xl + 0.2 * (xr-xl))
+                    label_pos.append(xl + 0.1 * (xr-xl))
             # Make labels #
             for i,labelName in enumerate(self._labels):
                 # Label intiialization #

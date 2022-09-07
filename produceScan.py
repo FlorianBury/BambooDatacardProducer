@@ -167,12 +167,13 @@ class Scan:
                         # Multi graphs plots #
                         if len(self.curves[curveName]['graphs'][combineMode]) > 0:
                             if combineType == 'limits':
-                                graph = self.curves[curveName]['graphs'][combineMode][subname][1]
+                                graphs.append(self.curves[curveName]['graphs'][combineMode][subname][1])
+                                if self.unblind:
+                                    graphs.append(self.curves[curveName]['graphs'][combineMode][subname][0])
                             if combineType == 'gof':
-                                graph = self.curves[curveName]['graphs'][combineMode][subname][0]
+                                graphs.append(self.curves[curveName]['graphs'][combineMode][subname][0])
                         else:
-                            graph = None
-                        graphs.append(graph)
+                            graphs.append(None)
                 if len(graphs) == 0:
                     continue
                 # Check for attributes #
@@ -183,12 +184,22 @@ class Scan:
                     for line in lines:
                         if line in plotCfg['lines'].keys():
                             attributes.append(plotCfg['lines'][line])
+                            if self.unblind and combineType == 'limits':
+                                lineOpt = copy.deepcopy(plotCfg['lines'][line])
+                                lineOpt['SetLineStyle'] = 1
+                                attributes.append(lineOpt)
                         else:
                             attributes.append({})
+                            if self.unblind and combineType == 'limits':
+                                attributes.append({})
                 # Get legend entries #
                 if 'legend' in plotCfg.keys():
                     for line in lines:
                         legends.append(plotCfg['legend'][line]) 
+                        if self.unblind:
+                            legends.append(None)
+                #if len(plotCfg['curves']) > 1:
+                #    embed()
                 # Title #
                 if 'title' in plotCfg.keys():
                     title = plotCfg['title']
@@ -312,10 +323,13 @@ class Scan:
                                   self.debug))          # debug
 
         # Run the pool #
+        print ("Starting pool of processes")
         with mp.Pool(processes=min(mp.cpu_count(),self.jobs)) as pool:
             results = pool.starmap(runCommand, pool_cmds)
+        print ("... done")
 
         # Add values to curves dict #
+        print ("Processing curves")
         idx = 0
         for icurve,curveName in enumerate(self.curves.keys()):
             for ipoint in range(len(self.curves[curveName]['points'])):
@@ -368,6 +382,7 @@ class Scan:
                     idx += 1
                 else:
                     raise ValueError(f'Curve name {curveName} at point {ipoint}, no result produced : is there a `values` or command `entry` ?')
+        print ("... done")
 
     def produceGraphs(self):
         for curveName in self.curves.keys():
@@ -533,7 +548,7 @@ class Scan:
         g_data.SetLineStyle(1)
         g_data.SetLineColor(ROOT.kBlack)
         g_data.SetMarkerStyle(20)
-        g_data.SetMarkerSize(0.)
+        g_data.SetMarkerSize(0.8)
         g_data.SetMarkerColor(ROOT.kBlack)
 
 
@@ -552,8 +567,12 @@ class Scan:
 
         # Plot #
         xpoints = list(g_central.GetX())
-        minx = min(xpoints)*0.9
-        maxx = max(xpoints)*1.1
+        if 'range' in options.keys():
+            assert len(options['range'])==2
+            minx,maxx = options['range']
+        else:
+            minx = min(xpoints)*0.9
+            maxx = max(xpoints)*1.1
         b1 = ROOT.TH1F("b2","", len(xpoints)*2, minx, maxx)
         ylow = g_onesigma.GetHistogram().GetMinimum()
         yhigh = g_twosigma.GetHistogram().GetMaximum()
@@ -566,9 +585,9 @@ class Scan:
         #if labelConv is not None:
         #    for label,x in labelConv.items():
         #        b1.GetXaxis().SetBinLabel(b1.GetXaxis().FindBin(x),label)
-        b1.LabelsOption("v")
-        b1.LabelsDeflate("X")
-        b1.LabelsDeflate("Y")
+        #b1.LabelsOption("v")
+        #b1.LabelsDeflate("X")
+        #b1.LabelsDeflate("Y")
 
         b1.Draw()
         g_twosigma.Draw("fe3same")
@@ -581,11 +600,11 @@ class Scan:
         if 'legend' in options.keys():
             leg = ROOT.TLegend()
             self.useAttributes(leg,options['legend'])
+            leg.AddEntry(g_central,"Median expected","l")
+            leg.AddEntry(g_onesigma,"68% CL expected","f")
+            leg.AddEntry(g_twosigma,"95% CL expected","f")
             if self.unblind:
                 leg.AddEntry(g_data,"Observed","l")
-            leg.AddEntry(g_central,"Expected (95% CL)","l")
-            leg.AddEntry(g_onesigma,"#pm 1 #sigma Expected","f")
-            leg.AddEntry(g_twosigma,"#pm 2 #sigma Expected","f")
 
         if 'texts' in options.keys():
             texts = []
@@ -597,12 +616,67 @@ class Scan:
         if 'additional' in options.keys():
             elementObj = []
             for element in options['additional']:
-                if element['type'] == 'TGraph':
-                    graph = ROOT.TGraph(len(element['data']))
-                    for i,(x,y) in enumerate(element['data']):
-                        graph.SetPoint(i,x,y)
-                    graph.Draw('same')
-                    elementObj.append(graph)
+                if 'TGraph' in element['type']:
+                    graph = getattr(ROOT,element['type'])(len(element['data']))
+                    error_type = None
+                    for i,data in enumerate(element['data']):
+                        if element['type'] == 'TGraph':
+                            if len(data) != 2:
+                                raise RuntimeError(f'A TGraph expects 2 inputs : x and y, you have provided {len(data)}')
+                            graph.SetPoint(i,data[0],data[1])
+                        elif element['type'] == 'TGraphErrors':
+                            if len(data) != 3:
+                                raise RuntimeError(f'A TGraphErrors expects 3 inputs : x, y and err_y, you have provided {len(data)}')
+                            graph.SetPoint(i,data[0],data[1])
+                            graph.SetPointError(i,0.,abs(data[1]*data[2]/100))
+                            error_type = 1
+                        elif element['type'] == 'TGraphAsymmErrors':
+                            if len(data) != 4:
+                                raise RuntimeError(f'A TGraphAsymmErrors expects 4 inputs : x, y, err_y_plus and err_y_minus you have provided {len(data)}')
+                            graph.SetPoint(i,data[0],data[1])
+                            graph.SetPointError(i,0.,0.,abs(data[1]*data[3]/100),abs(data[1]*data[2]/100))
+                            error_type = 2
+                        else:
+                            raise NotImplementedError(f"Type {element['type']} not implemented")
+                    opt = element['draw'] if 'draw' in element.keys() else ''
+                    if 'interpolate' in element.keys():
+                        ngraph = getattr(ROOT,element['type'])(int(element['interpolate']['points']))
+                        if error_type:
+                            graph_up = ROOT.TGraph(graph.GetN())
+                            graph_down = ROOT.TGraph(graph.GetN())
+                            X = list(graph.GetX())
+                            for i in range(graph.GetN()):
+                                graph_up.SetPoint(i,X[i],graph.GetErrorYhigh(i))
+                                graph_down.SetPoint(i,X[i],graph.GetErrorYlow(i))
+                        if "spline" in element["interpolate"].keys() and element["interpolate"]["spline"] != "":
+                            splineType = element["interpolate"]["spline"]
+                            spline = getattr(ROOT,splineType)("spline",graph,"0",element['interpolate']['min'],element['interpolate']['max'])
+                            if error_type:
+                                spline_up = getattr(ROOT,splineType)("spline_up",graph_up,"0",element['interpolate']['min'],element['interpolate']['max'])
+                                spline_down = getattr(ROOT,splineType)("spline_down",graph_down,"0",element['interpolate']['min'],element['interpolate']['max'])
+                        else:   
+                            spline = graph
+                            if error_type:
+                                spline_up = graph_up
+                                spline_down = graph_down
+                        for i,param in enumerate(np.linspace(minx,maxx,element['interpolate']['points'])):
+                            if param <= element['interpolate']['max'] and param >= element['interpolate']['min']:
+                                ngraph.SetPoint(i,param,spline.Eval(param))
+                                if error_type == 1:
+                                    ngraph.SetPointError(i,0.,spline_up.Eval(param))
+                                if error_type == 2:
+                                    ngraph.SetPointError(i,0.,0.,spline_down.Eval(param),spline_up.Eval(param))
+                            else:
+                                ngraph.SetPoint(i,param,graph.Eval(param))
+                                if error_type == 1:
+                                    ngraph.SetPointError(i,0.,graph_up.Eval(param))
+                                if error_type == 2:
+                                    ngraph.SetPointError(i,0.,0.,graph_down.Eval(param),graph_up.Eval(param))
+                        ngraph.Draw(f'{opt} same')
+                        elementObj.append(ngraph)
+                    else:
+                        graph.Draw(f'{opt} same')
+                        elementObj.append(graph)
                 else:
                     raise NotImplementedError
                 self.useAttributes(elementObj[-1],element['options'])
@@ -661,7 +735,7 @@ class Scan:
         if len(attributes) == 0:
             attributes = [{}] * len(graphs)
         elif len(attributes) != len(graphs):
-            raise RuntimeError(f'Plot {name} has {len(graphs)} but {len(attributes)} line plot options')
+            raise RuntimeError(f'Plot {name} has {len(graphs)} graphs but {len(attributes)} line plot options')
         if 'lines' in options.keys():
             for i in range(len(attributes)):
                 for key,val in options['lines'].items():
@@ -670,13 +744,17 @@ class Scan:
 
         # Check if some overrides are done anywhere, otherwise use default #
         custom_color = False
+        custom_xrange = False
         custom_yrange = False
         for attribute in attributes:
             for key in attribute.keys():
                 if 'Set' in key and 'Color' in key:
                     custom_color = True
-                if 'SetRange' in key and 'GetYaxis' in key:
+                if 'SetRangeUser' in key and 'GetYaxis' in key:
                     custom_yrange = True
+                if 'SetRangeUser' in key and 'GetXaxis' in key:
+                    custom_xrange = True
+                    minx,maxx = attribute[key]
 
         # Plot #
         xpoints = list()
@@ -686,7 +764,9 @@ class Scan:
                     if val not in xpoints:
                         xpoints.append(val)
         xpoints = sorted(xpoints)
-        if len(xpoints) > 0:
+        if custom_xrange:
+            pass
+        elif len(xpoints) > 0:
             minx = min(xpoints)*0.9
             maxx = max(xpoints)*1.1
         else:
@@ -702,20 +782,20 @@ class Scan:
             b1.GetYaxis().SetRangeUser(ylow, yhigh)
         b1.SetStats(0)
         #b1.GetXaxis().SetNDivisions(len(xpoints))
-        if labelConv is not None:
-            for label,x in labelConv.items():
-                b1.GetXaxis().SetBinLabel(b1.GetXaxis().FindBin(x),label)
-        b1.LabelsDeflate("X")
-        b1.LabelsDeflate("Y")
+        #if labelConv is not None:
+        #    for label,x in labelConv.items():
+        #        b1.GetXaxis().SetBinLabel(b1.GetXaxis().FindBin(x),label)
+        #b1.LabelsDeflate("X")
+        #b1.LabelsDeflate("Y")
 
 
         # Legend #
         if 'legend' in options.keys():
             leg = ROOT.TLegend()
             self.useAttributes(leg,options['legend'])
-            for g,legend in zip(graphs,legends):
-                if g is not None:
-                    leg.AddEntry(g,legend,"lp")
+            for graph,legend in zip(graphs,legends):
+                if graph is not None and legend is not None:
+                    leg.AddEntry(graph,legend,"lp")
 
         # Legend #
         N = len(graphs)

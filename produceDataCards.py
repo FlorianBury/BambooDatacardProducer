@@ -23,6 +23,7 @@ import numpy as np
 import math
 import multiprocessing as mp
 import numpy as np
+from scipy.stats import chi2, norm
 from functools import partial
 import enlighten
 from contextlib import redirect_stdout
@@ -64,6 +65,7 @@ COMBINE_DEFAULT_ARGS = [
     "--cminFallbackAlgo Minuit2,0:0.4"
 ]
 
+LAMBDA0 = chi2.ppf(1 - (1 - (norm.cdf(1) * 2 - 1)) / 2, 2) / 2
 
 
 class Datacard:
@@ -904,7 +906,7 @@ class Datacard:
 
                                 # Fix shape in case needed #
                                 if group != 'data_obs' and self.fix_histograms:
-                                    self.fixHistograms(hnom  = self.content[histName][group]['nominal'],
+                                    self.fixHistograms(hnom   = self.content[histName][group]['nominal'],
                                                         hup   = self.content[histName][group][systNameUp],
                                                         hdown = self.content[histName][group][systNameDown])
 
@@ -1029,10 +1031,13 @@ class Datacard:
 
     @staticmethod
     def fixHistograms(hnom,hdown=None,hup=None):
+        #stats = _getStats(hnom)
+        #fallback = stats[1]/stats[0] * LAMBDA0
         originalYieldNom  = hnom.Integral()
         originalYieldUp   = hup.Integral() if hup is not None else None
         originalYieldDown = hdown.Integral() if hdown is not None else None
         getVal = lambda y : 1e-5 * min(1., max(1e-10, y))
+        #getErr = lambda e : max(
         val = getVal(hnom.Integral())
         valup = getVal(hup.Integral()) if hup is not None else None
         valdown = getVal(hdown.Integral()) if hdown is not None else None
@@ -1697,6 +1702,18 @@ class Datacard:
                 if logging.root.level <= 10:
                     pbar.update()
 
+    @staticmethod
+    def _getStats(h):
+        if h.__class__.__name__.startswith('TH1'):
+            stats = np.zeros(4)
+        elif h.__class__.__name__.startswith('TH2'):
+            stats = np.zeros(7)
+        else:
+            raise NotImplementedError(f'Not understood histogram type {type(h)}')
+        h.GetStats(stats)
+        return stats
+
+
     def _getHistAndFallBack(self,histName,main):
         fallback            = []
         hists_for_binning   = []
@@ -1706,16 +1723,8 @@ class Datacard:
                 continue
             h = self.rebinGetHists(histName,[group])[0]
             if group in main:
-                # Get sumw,sumw2 #
-                if h.__class__.__name__.startswith('TH1'):
-                    stats = np.zeros(4)
-                elif h.__class__.__name__.startswith('TH2'):
-                    stats = np.zeros(7)
-                else:
-                    raise NotImplementedError(f'Not understood histogram {histName} type {type(h)}')
-                    # Note : if incorrect size -> nasty segfault (fun debugging)
-                h.GetStats(stats)
-                    # stats[0] = sumw, stats[1] = sumw2 , rest not important
+                stats = self._getStats(h)
+                # stats[0] = sumw, stats[1] = sumw2 , rest not important
                 fallback.append(stats[1]/stats[0])
                 # Add to list of hists for the binning #
                 hists_for_binning.append(h)

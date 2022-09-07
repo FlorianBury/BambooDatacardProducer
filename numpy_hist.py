@@ -87,6 +87,16 @@ class NumpyHist:
         return self._w.sum()
 
     @property 
+    def sumw(self):
+        """ Returns the histogram sumw """
+        return self.integral
+
+    @property 
+    def sumw2(self):
+        """ Returns the histogram sumw2 """
+        return self._s2.sum()
+
+    @property 
     def widths(self):
         """ Returns the bin widths in an array following the bin content """
         if self.ndim == 1:
@@ -341,7 +351,7 @@ class NumpyHist:
             
     def split(self,x_edges=None,y_edges=None,axis='x'):
         """
-            Split a 2D histogram into a series of smaller 2D histograms 
+            Split a 1D/2D histogram into a series of smaller 2D histograms 
             x_edges : edges on x axis along which to split
             y_edges : edges on y axis along which to split
                 If any is None, no splitting along this axis
