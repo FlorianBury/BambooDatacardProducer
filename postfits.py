@@ -877,7 +877,7 @@ class PostfitPlots:
             # Order = from largest to smallest integral
         else:
             self._order =  list(self._options.keys())
-        for group in reversed(self._order): # Need to ass small first
+        for group in reversed(self._order): # Need to add small first
             # Get options #
             optCfg = self._options[group]
             # Add to stack if background #
@@ -960,7 +960,7 @@ class PostfitPlots:
         col_size = max([len(self._legend_columns[i]) for i in range(len(self._legend_columns))])
         for i in range(len(self._legend_columns)):
             if len(self._legend_columns[i]) < col_size:
-                self._legend_columns[i] += [(ROOT.TObject(),"","")] * (col_size-len(self._legend_columns[i]))
+                self._legend_columns[i] += [(ROOT.TObject()," "," ")] * (col_size-len(self._legend_columns[i]))
         # Add columns to legend #
         for i in range(legend.GetNColumns()*col_size):
             column_index = i % legend.GetNColumns()
