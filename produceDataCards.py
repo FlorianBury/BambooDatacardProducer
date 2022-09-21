@@ -23,7 +23,6 @@ import numpy as np
 import math
 import multiprocessing as mp
 import numpy as np
-from scipy.stats import chi2, norm
 from functools import partial
 import enlighten
 from contextlib import redirect_stdout
@@ -65,11 +64,10 @@ COMBINE_DEFAULT_ARGS = [
     "--cminFallbackAlgo Minuit2,0:0.4"
 ]
 
-LAMBDA0 = chi2.ppf(1 - (1 - (norm.cdf(1) * 2 - 1)) / 2, 2) / 2
 
 
 class Datacard:
-    def __init__(self,outputDir=None,configPath=None,path=None,yamlName=None,worker=None,groups=None,shapeSyst=None,normSyst=None,histConverter=None,era=None,use_syst=False,fix_histograms=True,include_overflow=False,root_subdir=None,histCorrections=None,pseudodata=False,rebin=None,histEdit=None,histCut=None,textfiles=None,plotIt=None,combineConfigs=None,logName=None,custom_args=None,save_datacard=True,**kwargs):
+    def __init__(self,outputDir=None,configPath=None,path=None,yamlName=None,worker=None,groups=None,shapeSyst=None,normSyst=None,histConverter=None,era=None,use_syst=False,fix_histograms=True,include_overflow=False,root_subdir=None,histAdditionals=None,histCorrections=None,pseudodata=False,rebin=None,histEdit=None,histCut=None,textfiles=None,plotIt=None,combineConfigs=None,logName=None,custom_args=None,save_datacard=True,**kwargs):
         self.outputDir          = outputDir
         self.configPath         = configPath
         self.path               = path
@@ -81,7 +79,7 @@ class Datacard:
         self.yamlName           = yamlName
         self.root_subdir        = root_subdir
         self.pseudodata         = pseudodata
-        self.histConverter          = histConverter
+        self.histConverter      = histConverter
         self.groups             = groups
         self.normSyst           = normSyst
         self.shapeSyst          = shapeSyst
@@ -91,10 +89,11 @@ class Datacard:
         self.textfiles          = textfiles
         self.plotIt             = plotIt
         self.combineConfigs     = combineConfigs
+        self.histAdditionals    = histAdditionals
         self.histCorrections    = histCorrections
         self.save_datacard      = save_datacard
         self.custom_args        = custom_args
-        self.aggregation            = {}
+        self.aggregation        = {}
 
         # Format eras as string #
         if isinstance(self.era,list) or isinstance(era,tuple):
@@ -102,6 +101,11 @@ class Datacard:
         else:
             self.era = str(self.era)
 
+        # Make sure few things are iterable #
+        if not isinstance(self.path,list):
+            self.path = [self.path]
+        if not isinstance(self.yamlName,list):
+            self.yamlName = [self.yamlName]
 
         # Add logging output to log file #
         #handler = logging.FileHandler(os.path.join(self.outputDir,logName),mode='w')
@@ -116,6 +120,7 @@ class Datacard:
         self.shapeSyst = self.includeEntry(self.shapeSyst,'Shape syst',eras=self.era)
         self.combineConfigs = self.includeEntry(self.combineConfigs,'CombineConfigs',eras=self.era)
         self.histCorrections = self.includeEntry(self.histCorrections,'HistCorrections',eras=self.era,keep_inner_list=True)
+        self.histAdditionals = self.includeEntry(self.histAdditionals,'HistAdditionals',eras=self.era,keep_inner_list=True)
 
         # Make sure the histConverter keys are string (otherwise problems with eras, etc) #
         for k,v in self.histConverter.items():
@@ -195,8 +200,16 @@ class Datacard:
         self.initialize()
 
         # Load Yaml configs from bamboo #
-        self.yaml_dict = self.loadYaml()
+        self.yaml_dict = self.loadYaml(self.path,self.yamlName)
+        if self.histAdditionals is not None and 'yaml' in self.histAdditionals.keys():
+            addDirs = [os.path.dirname(yamlFile) for yamlFile in self.histAdditionals['yaml']]
+            addYaml = [os.path.basename(yamlFile) for yamlFile in self.histAdditionals['yaml']]
+            for fileName,fileCfg in self.loadYaml(addDirs,addYaml)['samples'].items():
+                if fileName not in self.yaml_dict['samples']:
+                    self.yaml_dict['samples'][fileName] = fileCfg
+                    logging.debug(f'\tAdding file {fileName} to yaml dictionary')
 
+        # Print out #
         logging.info(f'Running production over following categories :')
         for cat in self.content.keys():
             logging.info(f'... {cat}')
@@ -338,6 +351,34 @@ class Datacard:
             if len(hist_dict) == 0 or sum([len(val) for val in hist_dict.values()]) == 0:
                 logging.debug('\tNo histogram taken from this sample')
                 continue
+            # Get additional files #
+            if self.histAdditionals is not None and sample in self.histAdditionals['samples'].keys() and self.use_syst:
+                for systEntry in self.histAdditionals['samples'][sample]:
+                    files = systEntry['files']
+                    if isinstance(files,str):
+                        files = [files]
+                    for f in files:
+                        logging.debug(f'Looking at {f}')
+                    file_hists = [self.getHistograms(f) for f in files]
+                    for cat in hist_dict.keys():
+                        additional_hists = [fh[cat]['nominal'] for fh in file_hists if cat in fh.keys()]
+                        if len(additional_hists) == 1:
+                            h_diff = additional_hists[0]
+                            if h_diff.Integral() != 0:
+                                h_diff.Scale(hist_dict[cat]['nominal'].Integral()/h_diff.Integral())
+                            h_diff.Add(hist_dict[cat]['nominal'],-1)
+                            h_up = copy.deepcopy(hist_dict[cat]['nominal'])
+                            h_down = copy.deepcopy(hist_dict[cat]['nominal'])
+                            h_up.Add(h_diff,+1)
+                            h_down.Add(h_diff,-1)
+                            hist_dict[cat][f'{systEntry["name"]}Up'] = h_up
+                            hist_dict[cat][f'{systEntry["name"]}Down'] = h_down
+                        elif len(additional_hists) == 2:
+                            hist_dict[cat][f'{systEntry["name"]}Up'] = additional_hists[0]
+                            hist_dict[cat][f'{systEntry["name"]}Down'] = additional_hists[1]
+                        elif len(additional_hists) > 2:
+                            raise RuntimeError
+            # Print out #
             logging.debug("\tFound following histograms :")
             for histName in hist_dict.keys():
                 # Printout and check if empty #
@@ -553,7 +594,7 @@ class Datacard:
         return True
                 
     def getHistograms(self,rootfile):
-        sample = os.path.basename(rootfile)
+        sample = os.path.basename(rootfile) 
         # Get config info #
         lumi = self.yaml_dict["luminosity"][str(self.era)]
         if sample not in self.yaml_dict["samples"].keys():
@@ -658,17 +699,13 @@ class Datacard:
             h.Scale(lumi*xsec*br/sumweight)
         return h
              
-    def loadYaml(self):
-        if not isinstance(self.path,list):
-            self.path = [self.path]
-        if not isinstance(self.yamlName,list):
-            self.yamlName = [self.yamlName]
+    def loadYaml(self,paths,yamlNames):
         yamlDict = {}
-        for path in self.path:
+        for path in paths:
             if not os.path.isdir(path):
                 logging.error(f"`{path}` is not a directory")
                 continue
-            for yamlName in self.yamlName:
+            for yamlName in yamlNames:
                 yamlPath = os.path.join(path,yamlName)
                 if not os.path.exists(yamlPath):
                     logging.warning(f"`{yamlPath}` -> not found, skipped")
@@ -1960,7 +1997,7 @@ class Datacard:
             return
         # Initialize and get YAML #
         self.initialize()
-        self.yaml_dict = self.loadYaml()
+        self.yaml_dict = self.loadYaml(self.path,self.yamlName)
 
         # Prepare root files #
         logging.info("Preparing plotIt root files for categories")
@@ -2860,8 +2897,9 @@ class Datacard:
                         if len(limits) > 0:
                             path_plots = [os.path.join(subdirBin,'limits.pdf'),os.path.join(subdirBin,'limits.png')]
                             data = {"expected" : (limits[50.0],limits[84.0],limits[16.0],limits[97.5],limits[2.5]),
-                                    "observed" : limits[-1.0],
                                     "name"     : binSuffix}
+                            if 'unblind' in combineCfg.keys() and combineCfg['unblind']:
+                                data["observed"] = limits[-1.0],
                             content = {'paths'      : path_plots,
                                        'poi'        : 'r',
                                        'data'       : [data],
