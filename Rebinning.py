@@ -433,13 +433,16 @@ class Threshold2(Rebin):
             keep_non_convergence : keep the bin edges found, even if the number of requested bins is not achieved
 
         """
+        # Type safety checks #
         if not isinstance(thresh,np.ndarray):
             thresh = np.array(thresh)
         if not isinstance(fallback,np.ndarray):
             fallback = np.array(fallback)
-        fallback *= LAMBDA0 ** 0.5 # mathematical correction
         if not isinstance(h_list,list):
             raise RuntimeError('`h_list` must be a list')
+        # Apply the mathematic correction #²
+        fallback *= LAMBDA0 ** 0.5 
+        # ROOT hist -> numpy #
         nphs = [self._processHist(h) for h in h_list]
         # Check axes #
         for i in range(1,len(nphs)):
@@ -469,14 +472,20 @@ class Threshold2(Rebin):
         logging.debug("Starting scan for Threshold2")
         nbins = thresh.shape[0]
         trials = 1
-        trials_max = 10
-        while trials <= trials_max:
-            factor = 1.
-            epsilon = 0.01
-            epsilon_min = epsilon * 1e-9
-            self.ne = None
+        trials_max = 10 
+        # Start attempts loop #
+        while trials <= trials_max: 
+            # Because the threshold scan might fail to yield in the number of requested bins, 
+            # Attempts can be made to modify the variance and threshold shape
+            # -> A warning is printed, and actions should be taken, but otherwise the algorithm adapts
+            factor = 1.  # Factor applied to modify the normalisation of the thresholds 
+            epsilon = 0.01  # Modification steps of the factor 
+            epsilon_min = epsilon * 1e-9 # Minimum epsilon 
+            self.ne = None # Final binning to be used later
+            # Start scan loop #
             while factor > 0.:
-                thresh_test = thresh * factor * ws.sum() / thresh.max() 
+                thresh_test = thresh * factor * ws.sum() / thresh.max()  # Start with highest threshold -> should result in a single bin
+                # Get the indices #
                 idx = self.rebin_method(thresh  = thresh_test,
                                         data    = data,
                                         fallback=fallback)
@@ -488,13 +497,16 @@ class Threshold2(Rebin):
                 # Make binning #
                 ne = np.unique(np.r_[e[0], e[idx] , e[-1]])
                 logging.debug(f'\tTrying factor {factor:.5f} (epsilon = {epsilon:.3e}), number of bins = {len(ne)-1}')
+                # Rebin a total test histogram #
                 nphtest = nphtot.rebin(ne)
-                if ne.shape[0] <= nbins + 1: # Not too far
+                # Check of the binning choice #
+                if ne.shape[0] <= nbins + 1: # Not above requested number of bins 
                     # if perfect number -> record it #
-                    if ne.shape[0] == nbins + 1:
-                        if keep_non_convergence:
+                    if ne.shape[0] == nbins + 1: # Is the number of bins we want
+                        if keep_non_convergence: 
                             self.ne = ne
                         else:
+                            # Idea here is to check whether the rebinned test histogram is above the minimum yield per bin
                             if self.ne is None:
                                 self.ne = ne
                             else:
@@ -503,14 +515,17 @@ class Threshold2(Rebin):
                                     logging.debug(f'\tNew binning found but this attempt yields a bin below the minimum yield ({nphtest.w[nphtest.w<min_yield_per_bin]}), will not take into account')
                                 else:
                                     self.ne = ne
+                    # Even if we found the correct number of bins, we want to continue, 
+                    # Maybe first bin is not populated as much as it could be 
                     # Iteration #
                     if factor - epsilon > 0 or epsilon < epsilon_min:
+                        # If we can still go a step further 
                         factor -= epsilon 
                     else:
+                        # We cannot -> but we can decrease the step
+                        # This is sometimes needed otherwise the step is too large and overshoots the requested number of bins
                         epsilon /= 10
-                    # Even if we found the correct number of bins, we want to continue, 
-                    # maybe first bin is not populated as much as it could be 
-                else: #self.ne.shape[0] > nbins + 1 ->  # Too far
+                else: #self.ne.shape[0] > nbins + 1 ->  # Too many bins are produced
                     if self.ne is None and epsilon > epsilon_min:
                         # Not converged, maybe we passed over the good threshold
                         # Go back one step, and divide epsilon 
@@ -527,16 +542,20 @@ class Threshold2(Rebin):
                     else:
                         # self.ne has been found, will not get better
                         break
+                        # The thresholds will be modified
             if self.ne is None: # Still not found 
                 self.ne = ne
+
             if keep_non_convergence:
+                # We can stop here 
                 break
             else:
+                # Further checks of the binning #
                 nphtest = nphtot.rebin(self.ne)
                 if any(nphtest.w < min_yield_per_bin):
                     logging.warning(f'Found binning {self.ne}, but the following bins are below the min_yield_per_bin : {nphtest.w[nphtest.w<min_yield_per_bin]} < {min_yield_per_bin}')
                     logging.warning(f'Will modify the thresholds from {thresh}')
-                    thresh[np.argwhere(nphtest.w[::-1]>=min_yield_per_bin).ravel()] /= 2 #*= 0.8
+                    thresh[np.argwhere(nphtest.w[::-1]>=min_yield_per_bin).ravel()] /= 2 # Divide the thresholds for bins abive the minimum to midify its shape
                     logging.warning(f'\t-> to {thresh} [Attempt {trials}/{trials_max}]')
                     trials += 1
                 elif self.ne.shape[0] != nbins + 1 :
@@ -553,6 +572,7 @@ class Threshold2(Rebin):
             raise RuntimeError(f'Error in threshold, hist will have {self.ne.shape[0]-1} bins, but you asked for {nbins} : bins = {self.ne}')
             # Because can be a problem for combination
         logging.debug(f'Found binning : {self.ne}')
+        logging.debug(f'Thresholds used were : {thresh_test}')
                 
     @staticmethod
     def rebin_method(thresh, data, fallback):
