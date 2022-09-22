@@ -358,7 +358,7 @@ class Datacard:
                     if isinstance(files,str):
                         files = [files]
                     for f in files:
-                        logging.debug(f'Looking at {f}')
+                        logging.debug(f'Looking at additional file {f}')
                     file_hists = [self.getHistograms(f) for f in files]
                     for cat in hist_dict.keys():
                         additional_hists = [fh[cat]['nominal'] for fh in file_hists if cat in fh.keys()]
@@ -2899,7 +2899,7 @@ class Datacard:
                             data = {"expected" : (limits[50.0],limits[84.0],limits[16.0],limits[97.5],limits[2.5]),
                                     "name"     : binSuffix}
                             if 'unblind' in combineCfg.keys() and combineCfg['unblind']:
-                                data["observed"] = limits[-1.0],
+                                data["observed"] = limits[-1.0]
                             content = {'paths'      : path_plots,
                                        'poi'        : 'r',
                                        'data'       : [data],
