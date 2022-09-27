@@ -358,7 +358,7 @@ class PostfitPlots:
                                                       self._histograms['__combined__']['data'])
                 # Need to get first to get range of data points for the ratio #
             else:
-                maxabsr = 0.
+                maxabsr = None
             err_hist = self._getTotalHistError(self._histograms['__combined__']['total'],maxabsr)
             self._changeLabels(err_hist)
             err_hist.Draw('E2 hist same')
@@ -374,6 +374,7 @@ class PostfitPlots:
         pdfPath = os.path.join(self._output_path,pdfName)
                                 
         canvas.Print(pdfPath)
+        canvas.Close()
         logging.info(f'Plot saved as {pdfPath}')
 
         # Produce tex yield table
@@ -614,7 +615,7 @@ class PostfitPlots:
             total_err.SetBinContent(i,0.)
             err = total_hist.GetBinError(i)/total_hist.GetBinContent(i)
             total_err.SetBinError(i,err)
-            if err > maxabsr:
+            if maxabsr is None and err > maxabsr:
                 maxabsr = err
 
         # Custom #
