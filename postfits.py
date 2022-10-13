@@ -366,6 +366,13 @@ class PostfitPlots:
                 err_data.Draw('E1P same')
             logging.debug('... done')
 
+            # Draw signals in ratio plot #
+            for group in self._histograms['__combined__'].keys():
+                if self._options[group]['type'] == 'signal':
+                    sig_ratio = self._getSignalInRatio(self._histograms['__combined__']['total'],
+                                                       self._histograms['__combined__'][group])
+                    sig_ratio.Draw("hist same")
+
         # Save to pdf # 
         if not os.path.exists(self._output_path):
             logging.info(f'Output path {self._output_path} did not exist, will create it')
@@ -611,12 +618,21 @@ class PostfitPlots:
         total_hist.SetFillStyle(3154)
 
         # Fill #
+        max_err = 0.
         for i in range(1,total_hist.GetNbinsX()+1):
             total_err.SetBinContent(i,0.)
             err = total_hist.GetBinError(i)/total_hist.GetBinContent(i)
             total_err.SetBinError(i,err)
-            if maxabsr is None and err > maxabsr:
-                maxabsr = err
+            if maxabsr is not None and err <= 1.5*maxabsr and err >= max_err:
+                max_err = err
+            if maxabsr is None:
+                max_err = err
+        if maxabsr is None:
+            maxabsr = max_err
+        else:
+            if max_err == 0.:
+                max_err = 1.5*maxabsr
+            maxabsr = max(maxabsr,max_err)
 
         # Custom #
         minr = - abs(maxabsr) * 1.1
@@ -686,6 +702,20 @@ class PostfitPlots:
 
         # Return #
         return err,maxabsr
+
+    def _getSignalInRatio(self,total_hist,sig_hist):
+        ratio_sig = sig_hist.Clone()
+        for i in range(1,total_hist.GetNbinsX()+1):
+            bin_width = total_hist.GetBinWidth(i)
+            dividend = total_hist.GetBinContent(i) 
+            # Set point : (data - expectation) / expectation = data/expectation -1 #
+            y = sig_hist.GetBinContent(i)
+            if dividend > 0:
+                ratio_sig.SetBinContent(i,y/dividend)
+            else:
+                ratio_sig.SetBinContent(i,0.)
+        return ratio_sig
+            
 
     def _getTemplate(self):
         # Set bin content #
